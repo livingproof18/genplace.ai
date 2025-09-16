@@ -6,6 +6,7 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* your existing @theme inline, :root tokens, and @layer base rules are fine */
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -46,7 +47,42 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
+/* ==== BRAND TOKENS (spec) ==== */
+/* Default: dark UI */
 :root {
+  /* near-black bg & light foreground */
+  --background: 16 16% 6%;
+  --foreground: 210 40% 98%;
+
+  /* primary = #3B82F6 (blue-500) */
+  --primary: 217 91% 60%;
+  --primary-foreground: 0 0% 100%;
+
+  /* surfaces & neutrals */
+  --card: 0 0% 6%;
+  --card-foreground: 0 0% 98%;
+  --border: 220 14% 22%;
+  --input: 220 14% 22%;
+  --ring: 217 91% 60%;
+}
+
+/* Light mode overrides (optional — defaults to system if user toggles) */
+.dark {
+  --background: 224 71% 4%;
+  --foreground: 213 31% 91%;
+
+  /* keep primary legible on dark */
+  --primary: 217 91% 60%;
+  --primary-foreground: 0 0% 100%;
+
+  --card: 224 71% 6%;
+  --card-foreground: 213 31% 91%;
+  --border: 220 14% 22%;
+  --input: 220 14% 22%;
+  --ring: 217 91% 60%;
+}
+
+/* :root {
   --radius: 0.625rem;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
@@ -113,7 +149,7 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
-}
+} */
 
 @layer base {
   * {
@@ -122,4 +158,10 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Fancy spec shadow */
+@utility shadow-glow {
+  box-shadow: 0 0 0 1px hsl(var(--ring) / 0.4),
+    0 6px 20px hsl(var(--ring) / 0.12);
 }
