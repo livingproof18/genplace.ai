@@ -1,83 +1,88 @@
-import Image from "next/image";
+// src/app/page.tsx
+import Link from "next/link";
+import { SiteHeader } from "@/components/site-header";
+import { MosaicPreview } from "@/components/mosaic-preview";
+import { HowItWorks } from "@/components/how-it-works";
+import { LiveTicker } from "@/components/live-ticker";
+import { Button } from "@/components/ui/button";
 
 export default function Home() {
   return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="min-h-[72vh] grid place-items-center px-6 py-16 bg-gradient-to-br from-primary/10 via-background to-background">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+    <div className="font-sans">
+      <SiteHeader />
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a className="bg-primary text-primary-foreground hover:bg-primary/90 rounded-2xl shadow-glow h-12 px-6 inline-flex items-center">
-            Go to Canvas
-          </a>
+      {/* HERO */}
+      <section className="relative">
+        <div className="absolute inset-0 pointer-events-none bg-gradient-to-b from-primary/10 via-transparent to-transparent" />
+        <div className="mx-auto max-w-7xl px-4 py-14 md:py-20 grid md:grid-cols-2 gap-10 items-center">
+          {/* Left copy */}
+          <div className="space-y-5">
+            <h1 className="text-4xl md:text-5xl font-semibold tracking-tight">
+              GenPlace: the place where <span className="text-primary">prompts</span> come alive
+            </h1>
+            <p className="text-base md:text-lg text-muted-foreground">
+              Type a prompt, generate AI art, and place it onto a shared world.
+              Watch the canvas evolve in real time.
+            </p>
+            <div className="flex flex-wrap items-center gap-3 pt-2">
+              <Button asChild size="lg" className="rounded-2xl shadow-glow">
+                <Link href="/map">Go to Canvas</Link>
+              </Button>
+              <Button asChild variant="secondary" size="lg" className="rounded-2xl">
+                <Link href="/gallery">See the live map</Link>
+              </Button>
+              <Button asChild variant="ghost" size="lg" className="rounded-2xl">
+                <Link href="#how-it-works">How it works</Link>
+              </Button>
+            </div>
+          </div>
 
+          {/* Right: animated mosaic */}
+          <div className="flex justify-center md:justify-end">
+            <MosaicPreview cols={6} rows={4} size={88} showCaption />
+          </div>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
+      </section>
+
+      {/* Live activity */}
+      <div className="py-8 md:py-12">
+        <LiveTicker />
+      </div>
+
+      {/* How it works */}
+      <div id="how-it-works" className="py-8 md:py-14">
+        <HowItWorks />
+      </div>
+
+      {/* Why GenPlace */}
+      <section className="mx-auto max-w-7xl px-4 pb-16">
+        <div className="rounded-2xl border p-6 md:p-8 bg-card/70">
+          <h2 className="text-2xl md:text-3xl font-semibold tracking-tight mb-4">Why GenPlace</h2>
+          <ul className="grid md:grid-cols-3 gap-3 text-sm text-muted-foreground">
+            <li className="rounded-xl border p-4 bg-background/40">
+              <span className="font-medium text-foreground">Social</span> — build together on one living canvas.
+            </li>
+            <li className="rounded-xl border p-4 bg-background/40">
+              <span className="font-medium text-foreground">Generative</span> — anyone can create with a single prompt.
+            </li>
+            <li className="rounded-xl border p-4 bg-background/40">
+              <span className="font-medium text-foreground">Gamey</span> — cooldowns, levels, and friendly rivalry.
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      {/* Footer */}
+      <footer className="border-t">
+        <div className="mx-auto max-w-7xl px-4 py-6 text-sm text-muted-foreground flex items-center justify-between">
+          <span>© {new Date().getFullYear()} GenPlace</span>
+          <nav className="flex gap-4">
+            <Link href="/terms" className="hover:text-foreground">Terms</Link>
+            <Link href="/privacy" className="hover:text-foreground">Privacy</Link>
+            <a href="https://x.com/placeholder" target="_blank" rel="noreferrer" className="hover:text-foreground">X/Twitter</a>
+            <a href="https://discord.gg/placeholder" target="_blank" rel="noreferrer" className="hover:text-foreground">Discord</a>
+          </nav>
+        </div>
       </footer>
     </div>
   );
