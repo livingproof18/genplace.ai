@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { GridPlacement } from "./canvas-map";
+import type { GridPlacement } from "./types";
 
 export function PromptDrawer({
     tile,
@@ -48,6 +48,7 @@ export function PromptDrawer({
         onPlaced({
             x: tile.x,
             y: tile.y,
+            z: 5, // must match TILE_ZOOM used by the map
             url: imgUrl,
             prompt,
             size,
