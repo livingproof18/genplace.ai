@@ -33,7 +33,7 @@ export function ThemeToggle() {
             title="Toggle theme"
         >
             {isDark ? <Sun size={16} /> : <Moon size={16} />}
-            <span className="text-sm">{isDark ? "Light" : "Dark"}</span>
+            {/* <span className="text-sm">{isDark ? "Light" : "Dark"}</span> */}
         </button>
     );
 }

@@ -1,15 +1,14 @@
 // src/components/map/maplibre-world.tsx
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { GridPlacement } from "./types";
+import { TopLeftControls } from "./top-left-controls";
+import { TopRightControls } from "./top-right-controls"; // ⬅️ add this import
 
 // ---- CONFIG ----
 const TILE_ZOOM = 5;
-// OpenFreeMap style (vector / free / OSS)
 const STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
-// or try another: "https://tiles.openfreemap.org/styles/liberty" bright
-
 // ----------------
 
 // Slippy helpers
@@ -18,33 +17,102 @@ function lon2tile(lon: number, z: number) {
 }
 function lat2tile(lat: number, z: number) {
     const rad = (lat * Math.PI) / 180;
-    return Math.floor(
-        ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * Math.pow(2, z)
-    );
+    return Math.floor(((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * Math.pow(2, z));
 }
-function tile2lon(x: number, z: number) {
-    return (x / Math.pow(2, z)) * 360 - 180;
-}
+function tile2lon(x: number, z: number) { return (x / Math.pow(2, z)) * 360 - 180; }
 function tile2lat(y: number, z: number) {
     const n = Math.PI - (2 * Math.PI * y) / Math.pow(2, z);
     return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
 }
-
-// Compute geographic quad for a slippy tile
-function tileBounds(x: number, y: number, z: number): [[number, number], [number, number], [number, number], [number, number]] {
+function tileBounds(x: number, y: number, z: number) {
     const west = tile2lon(x, z);
     const east = tile2lon(x + 1, z);
     const north = tile2lat(y, z);
     const south = tile2lat(y + 1, z);
-    // MapLibre wants [lng, lat] corners in clockwise order
     return [
-        [west, north], // top-left
-        [east, north], // top-right
-        [east, south], // bottom-right
-        [west, south], // bottom-left
-    ];
+        [west, north], [east, north], [east, south], [west, south],
+    ] as [[number, number], [number, number], [number, number], [number, number]];
 }
 
+// Unique id for our art tile
+const artId = (x: number, y: number, z: number) => `gp_${x}_${y}_${z}`;
+
+// Fingerprint a placement so we know if the image/coords actually changed
+const fpPlacement = (p: GridPlacement) =>
+    `${p.url}|${p.x}|${p.y}|${p.z}`;
+
+// Build a simple signature for placements we actually render
+const placementsSig = (list: GridPlacement[]) =>
+    list
+        .filter(p => p.z === TILE_ZOOM)
+        .map(p => `${p.x},${p.y},${p.z}:${p.url}`)
+        .sort()
+        .join(";");
+
+
+
+// === Declutter helpers (style-aware & gentle) ===
+function applyDeclutter(map: any) {
+    const style = map.getStyle?.();
+    if (!style || !style.layers) return;
+
+    const layers: any[] = style.layers;
+    const isOurOverlay = (l: any) => typeof l?.id === "string" && l.id.startsWith("gp_");
+    const hideIf = (pred: (l: any) => boolean) => {
+        layers.forEach(l => {
+            if (isOurOverlay(l)) return;
+            if (pred(l) && map.getLayer(l.id)) {
+                try { map.setLayoutProperty(l.id, "visibility", "none"); } catch { }
+            }
+        });
+    };
+
+    hideIf(l =>
+        l["source-layer"] === "building" ||
+        /building|building_outline|building-?number|housenumber/i.test(l.id) ||
+        l.type === "fill-extrusion"
+    );
+    hideIf(l =>
+        /(^|_)poi(_|$)|amenity|mbxpoi|place_of_worship/i.test(l.id) &&
+        !/place-label|place_label|transport|airport_label/i.test(l.id)
+    );
+    hideIf(l => /aeroway|runway|taxiway/i.test(l.id) && !/airport_label/i.test(l.id));
+    hideIf(l =>
+        /tree|wood_symbol/i.test(l.id) &&
+        !/landuse|landcover|park|forest|wood|grass|meadow/i.test(l.id)
+    );
+}
+function installDeclutterHooks(map: any) {
+    try { map.setTerrain(null as any); } catch { }
+    map.dragRotate.disable();
+    map.touchZoomRotate.disableRotation();
+    map.keyboard?.disableRotation?.();
+
+    let raf: number | null = null;
+    let lastRunSignature = "";
+    const runOnceSettled = () => {
+        if (raf !== null) cancelAnimationFrame(raf);
+        raf = requestAnimationFrame(() => {
+            if (!map.isStyleLoaded?.()) return;
+            const layers = map.getStyle?.().layers || [];
+            const sig = layers.length + ":" + layers.map((l: any) => l.id).join("|");
+            if (sig !== lastRunSignature) {
+                applyDeclutter(map);
+                lastRunSignature = sig;
+            }
+        });
+    };
+    runOnceSettled();
+    map.on("styledata", runOnceSettled);
+    map.on("error", (e: any) => {
+        const err = e?.error;
+        if (err?.name === "AbortError") return;
+        console.error("[MapLibre error]", err || e);
+    });
+    map.once("remove", () => { if (raf !== null) cancelAnimationFrame(raf); });
+}
+
+// === Component ===
 type Props = {
     placements: GridPlacement[];
     onClickEmpty: (xy: { x: number; y: number }) => void;
@@ -56,19 +124,19 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement }: Pr
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<any>(null);
     const center = useMemo<[number, number]>(() => [0, 20], []);
-
-    // keep local index to find a placement by (x,y,z)
     const indexRef = useRef<Map<string, GridPlacement>>(new Map());
+    const [overlaysVisible, setOverlaysVisible] = useState(true);
+    // Track what we currently have on the map to avoid churn
+    const currentIdsRef = useRef<Set<string>>(new Set());
+    const currentMetaRef = useRef<Map<string, string>>(new Map()); // id -> fingerprint
+    const lastSigRef = useRef<string>("");
 
-    // Mount the map
     useEffect(() => {
-        let maplibregl: any;
         let destroyed = false;
-
         (async () => {
             const lib = await import("maplibre-gl");
             if (destroyed) return;
-            maplibregl = lib.default ?? lib;
+            const maplibregl = (lib as any).default ?? lib;
 
             const map = new maplibregl.Map({
                 container: containerRef.current!,
@@ -76,103 +144,47 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement }: Pr
                 center,
                 zoom: 3,
                 attributionControl: true,
-                // keep it flat
                 pitch: 0,
                 maxPitch: 0,
                 bearing: 0,
-                // stop rotation/tilt gestures from the start
                 dragRotate: false,
                 pitchWithRotate: false,
-                touchPitch: false,         // you already had this
-                // (optional) projection: 'mercator' // default; just being explicit
+                touchPitch: false,
             });
-            console.log(map)
             mapRef.current = map;
 
-            map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "top-right");
-
             map.on("load", () => {
-                // Hide busy layers: airports, POIs, tree/landcover labels, etc.
-                // const ids = map.getStyle().layers.map((l: any) => l.id) as string[];
-                // const hideIf = (test: (id: string) => boolean) => {
-                //     ids.forEach((id) => {
-                //         if (test(id) && map.getLayer(id)) {
-                //             map.setLayoutProperty(id, "visibility", "none");
-                //         }
-                //     });
-                // };
-
-                // // These predicates are generous to handle differences across styles
-                // const airports = /aeroway|airport|runway|taxiway/i;
-                // const pois = /poi|amenity|poi-label|place_of_worship|mbxpoi/i;
-                // const trees = /tree|landcover_wood|wood|forest|green|landuse|nature/i;  //park
-
-                // hideIf((id) => airports.test(id));
-                // hideIf((id) => pois.test(id));
-                // hideIf((id) => trees.test(id));
-                // --- Inspect layers once to know what's available ---
-                const layers = (map.getStyle().layers || []) as any[];
-
-                // Helper: hide by predicate
-                const hideIf = (pred: (l: any) => boolean) => {
-                    layers.forEach(l => {
-                        if (pred(l) && map.getLayer(l.id)) {
-                            map.setLayoutProperty(l.id, "visibility", "none");
-                        }
-                    });
-                };
-                // 1) HIDE BUILDINGS (all forms)
-                hideIf(l =>
-                    l["source-layer"] === "building" ||                            // OpenMapTiles schema
-                    /building|building_outline|building-?number|housenumber/i.test(l.id) ||
-                    l.type === "fill-extrusion"                                    // any 3D buildings, regardless of id
-                );
-                // 2) HIDE BUSY POIs (but keep place/transport labels if you want)
-                hideIf(l =>
-                    /(^|_)poi(_|$)|amenity|mbxpoi|place_of_worship/i.test(l.id) &&
-                    !/place-label|place_label|transport|airport_label/i.test(l.id)
-                );
-                // 3) HIDE AIRPORT SURFACES (runways/taxiways), keep airport label if desired
-                hideIf(l => /aeroway|runway|taxiway/i.test(l.id) && !/airport_label/i.test(l.id));
-                // 4) TREES: keep parks/greens, only hide tree SYMBOLS if present
-                // Many styles have separate point/symbol layers for individual trees; keep polygon greens!
-                hideIf(l =>
-                    /tree|wood_symbol/i.test(l.id) &&                               // only symbols
-                    !/landuse|landcover|park|forest|wood|grass|meadow/i.test(l.id)  // never hide polygon greens
-                );
-                // Optional: if the style defines terrain, ensure flat look
-                try { map.setTerrain(null as any); } catch { }
-                // extra belts & braces: disable any handlers that might re-enable tilt/rotate
-                map.dragRotate.disable();
-                map.touchZoomRotate.disableRotation();
-                map.keyboard?.disableRotation?.();
-
-                // if the chosen style includes terrain, force it off for a perfectly flat map
-                try { map.setTerrain(null as any); } catch { }
-
-                // Optional: tone down admin boundaries/minor roads if needed
-                // hideIf(id => /boundary-admin|minor_road|service|track/.test(id));
-
-                // Cursor feedback on hover
+                installDeclutterHooks(map);
                 map.getCanvas().style.cursor = "grab";
 
-                // Click-to-place
                 map.on("click", (e: any) => {
                     const lng = e.lngLat.lng;
                     const lat = e.lngLat.lat;
                     const x = lon2tile(lng, TILE_ZOOM);
                     const y = lat2tile(lat, TILE_ZOOM);
-                    const key = `${x}:${y}:${TILE_ZOOM}`;
-                    const hit = indexRef.current.get(key);
-                    if (hit) onClickPlacement(hit);
-                    else onClickEmpty({ x, y });
+                    const hit = indexRef.current.get(`${x}:${y}:${TILE_ZOOM}`);
+                    hit ? onClickPlacement(hit) : onClickEmpty({ x, y });
                 });
 
-                // Resize handling
                 const onResize = () => map.resize();
                 window.addEventListener("resize", onResize);
                 map.once("remove", () => window.removeEventListener("resize", onResize));
             });
+            // If the style is replaced (e.g., switch styles), clear local caches.
+            // Our next placements sync will re-add only what's needed.
+            map.on("styledata", () => {
+                const style = map.getStyle?.();
+                if (!style || !style.sources) return;
+                const existing = new Set(Object.keys(style.sources).filter((k) => k.startsWith("gp_")));
+                // prune anything not in the style anymore
+                for (const id of currentIdsRef.current) {
+                    if (!existing.has(id)) {
+                        currentIdsRef.current.delete(id);
+                        currentMetaRef.current.delete(id);
+                    }
+                }
+            });
+
         })();
 
         return () => {
@@ -184,59 +196,174 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement }: Pr
         };
     }, [center, onClickEmpty, onClickPlacement]);
 
-    // Sync placements → (image sources + layers)
+    // Sync placements → add/update/remove only what's necessary
+    // Cache last placements signature to avoid doing work when nothing changed
+
+    // Sync placements → add/update/remove only what's necessary
     useEffect(() => {
         const map = mapRef.current;
-        if (!map) return;
+        if (!map || !map.getStyle?.() || !map.isStyleLoaded?.()) return;
 
-        // Build index for hit-testing
+        // Early no-op if nothing changed (prevents churn)
+        const sig = placementsSig(placements);
+        if (sig === lastSigRef.current && currentIdsRef.current.size > 0) {
+            // Still ensure opacity matches the toggle without scanning layers:
+            for (const id of currentIdsRef.current) {
+                const layerId = `${id}_layer`;
+                if (map.getLayer(layerId)) {
+                    map.setPaintProperty(layerId, "raster-opacity", overlaysVisible ? 1 : 0);
+                }
+            }
+            return;
+        }
+        lastSigRef.current = sig;
+
+        // 1) Build hit-test index
         indexRef.current.clear();
         placements.forEach((p) => indexRef.current.set(`${p.x}:${p.y}:${p.z}`, p));
 
-        // Track what should exist
+        // 2) Desired ids + fingerprints at fixed z
         const wantIds = new Set<string>();
-        placements.forEach((p) => {
-            if (p.z !== TILE_ZOOM) return; // we render at fixed z
-            const id = `gp_${p.x}_${p.y}_${p.z}`;
+        const wantMeta = new Map<string, string>();
+        for (const p of placements) {
+            if (p.z !== TILE_ZOOM) continue;
+            const id = artId(p.x, p.y, p.z);
             wantIds.add(id);
+            wantMeta.set(id, fpPlacement(p));
+        }
 
-            // add/update image source
+        // 3) Reconcile with current style sources (gp_* only)
+        const style = map.getStyle();
+        const existingSources = style?.sources ? Object.keys(style.sources) : [];
+        const existingGpIds = new Set(existingSources.filter((k) => k.startsWith("gp_")));
+
+        // Drop any local ids that aren't in the style anymore
+        for (const id of Array.from(currentIdsRef.current)) {
+            if (!existingGpIds.has(id)) {
+                currentIdsRef.current.delete(id);
+                currentMetaRef.current.delete(id);
+            }
+        }
+
+        // 4) REMOVE stale ids from the style
+        for (const id of existingGpIds) {
+            if (!wantIds.has(id)) {
+                const layerId = `${id}_layer`;
+                if (map.getLayer(layerId)) map.removeLayer(layerId);
+                if (map.getSource(id)) map.removeSource(id);
+                currentIdsRef.current.delete(id);
+                currentMetaRef.current.delete(id);
+            }
+        }
+
+        // Helper: put new art layers above all basemap layers (top of stack)
+        const addLayerOnTop = (layerSpec: any) => {
+            const layers = map.getStyle()?.layers ?? [];
+            // Insert at the end (top). If you want to insert just above labels, you could find a label id here.
+            const beforeId = undefined;
+            map.addLayer(layerSpec, beforeId);
+        };
+
+        // 5) ADD or UPDATE desired ids
+        for (const p of placements) {
+            if (p.z !== TILE_ZOOM) continue;
+
+            const id = artId(p.x, p.y, p.z);
+            const meta = fpPlacement(p);
+            const layerId = `${id}_layer`;
+            const bounds = tileBounds(p.x, p.y, p.z);
+
             if (!map.getSource(id)) {
-                map.addSource(id, {
-                    type: "image",
-                    url: p.url,
-                    coordinates: tileBounds(p.x, p.y, p.z),
-                });
-                map.addLayer({
-                    id: `${id}_layer`,
+                map.addSource(id, { type: "image", url: p.url, coordinates: bounds });
+                addLayerOnTop({
+                    id: layerId,
                     type: "raster",
                     source: id,
-                    paint: { "raster-opacity": 1 },
+                    paint: { "raster-opacity": overlaysVisible ? 1 : 0 },
                 });
+                currentIdsRef.current.add(id);
+                currentMetaRef.current.set(id, meta);
             } else {
-                // Update coordinates or URL if changed
-                const src = map.getSource(id);
-                if (src && src.updateImage) {
-                    (src as any).updateImage({
-                        url: p.url,
-                        coordinates: tileBounds(p.x, p.y, p.z),
-                    });
+                const prev = currentMetaRef.current.get(id);
+                if (prev !== meta) {
+                    const src = map.getSource(id) as any;
+                    if (src?.updateImage) {
+                        src.updateImage({ url: p.url, coordinates: bounds });
+                    } else {
+                        // Fallback if the source lost updateImage (e.g., style shenanigans):
+                        if (map.getLayer(layerId)) map.removeLayer(layerId);
+                        map.removeSource(id);
+                        map.addSource(id, { type: "image", url: p.url, coordinates: bounds });
+                        addLayerOnTop({
+                            id: layerId,
+                            type: "raster",
+                            source: id,
+                            paint: { "raster-opacity": overlaysVisible ? 1 : 0 },
+                        });
+                    }
+                    currentMetaRef.current.set(id, meta);
                 }
+                // keep opacity in sync without scanning
+                if (map.getLayer(layerId)) {
+                    map.setPaintProperty(layerId, "raster-opacity", overlaysVisible ? 1 : 0);
+                }
+                currentIdsRef.current.add(id);
             }
-        });
+        }
+    }, [placements, overlaysVisible]);
 
-        // Remove any stale sources/layers
-        (map.getStyle().layers as any[]).forEach((layer: any) => {
-            if (!layer.id.startsWith("gp_")) return;
-            const base = layer.id.replace(/_layer$/, "");
-            if (!wantIds.has(base)) {
-                if (map.getLayer(layer.id)) map.removeLayer(layer.id);
-                if (map.getSource(base)) map.removeSource(base);
+
+
+    // Toggle visibility across our tracked overlay tiles only (no layer scan)
+    useEffect(() => {
+        const map = mapRef.current;
+        if (!map || !map.isStyleLoaded?.()) return;
+
+        for (const id of currentIdsRef.current) {
+            const layerId = `${id}_layer`;
+            if (map.getLayer(layerId)) {
+                map.setPaintProperty(layerId, "raster-opacity", overlaysVisible ? 1 : 0);
             }
-        });
-    }, [placements]);
+        }
+    }, [overlaysVisible]);
 
-    return <div ref={containerRef} className="h-dvh w-dvw" style={{ position: "relative" }} />;
+
+    // Handlers for controls
+    const zoomIn = () => mapRef.current?.zoomIn({ duration: 200 });
+    const zoomOut = () => mapRef.current?.zoomOut({ duration: 200 });
+    const toggleOverlays = () => setOverlaysVisible((v) => !v);
+    const showHelp = () => {
+        window.alert("Pan/zoom the map. Click an empty tile to place. Toggle overlay to show/hide artwork.");
+    };
+    const openSocial = () => {
+        const url = typeof window !== "undefined" ? window.location.href : "https://genplace.ai";
+        const text = encodeURIComponent("Check out the GenPlace collaborative AI canvas!");
+        window.open(`https://x.com/intent/tweet?text=${text}%20${encodeURIComponent(url)}`, "_blank");
+    };
+
+    // Optional: route or modal for login
+    const onLogin = () => {
+        // Replace with your auth modal or router push
+        window.location.href = "/login";
+    };
+
+    return (
+        <div ref={containerRef} className="h-dvh w-dvw" style={{ position: "relative" }}>
+            {/* Floating control bar (top-left) */}
+            <TopLeftControls
+                onHelp={showHelp}
+                onZoomIn={zoomIn}
+                onZoomOut={zoomOut}
+                onShare={openSocial}
+                overlaysVisible={overlaysVisible}
+                onToggleOverlays={toggleOverlays}
+            />
+
+            {/* Top-right controls (column) */}
+            <TopRightControls onLogin={onLogin} />
+            {/* Or: <TopRightControls loginHref="/auth" /> */}
+        </div>
+    );
 }
 
 export { TILE_ZOOM };
