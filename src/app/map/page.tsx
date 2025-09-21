@@ -5,9 +5,8 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import type { GridPlacement } from "@/components/map/types";
 
-// Dynamically import the Leaflet map (no SSR)
-const CanvasMapWorld = dynamic(
-    () => import("@/components/map/canvas-map-world").then(m => m.CanvasMapWorld),
+const MapLibreWorld = dynamic(
+    () => import("@/components/map/maplibre-world").then(m => m.MapLibreWorld),
     { ssr: false }
 );
 
@@ -23,19 +22,17 @@ export default function MapPage() {
     };
 
     return (
-        // Full-bleed canvas: the map component itself will be fixed to the viewport
         <div className="h-dvh w-screen overflow-hidden">
-            <CanvasMapWorld
+            <MapLibreWorld
                 sizePx={size}
                 placements={placements}
                 onClickEmpty={(xy) => setSelectedEmpty(xy)}
                 onClickPlacement={(p) => setDetails(p)}
             />
 
-            {/* You can re-enable these later; they'll float above the map if absolutely/fixed positioned */}
+            {/* bring these back when ready; they’ll float on top if fixed/absolute */}
             {/* <PromptDrawer tile={selectedEmpty} size={size} onClose={() => setSelectedEmpty(null)} onPlaced={handlePlace} />
-      <TileDetailsModal placement={details} onClose={() => setDetails(null)} />
-      <OnboardingCoach /> */}
+      <TileDetailsModal placement={details} onClose={() => setDetails(null)} /> */}
         </div>
     );
 }

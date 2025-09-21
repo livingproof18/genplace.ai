@@ -89,6 +89,8 @@ export function CanvasMapWorld({
                     // You can swap this URL for another provider (MapTiler, Mapbox, etc.)
                     attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                // url="https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
+
                 />
 
                 {placements.map((p, i) => {
