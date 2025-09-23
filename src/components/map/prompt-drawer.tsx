@@ -60,12 +60,12 @@ export function PromptDrawer({
 
     return (
         <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
-            <SheetContent side="right" className="w-[420px] sm:w-[460px]">
+            <SheetContent side="right" className="w-[420px] sm:w-[460px] z-[1000]">
                 <SheetHeader>
                     <SheetTitle>Place on tile {tile ? `(${tile.x}, ${tile.y})` : ""}</SheetTitle>
                 </SheetHeader>
 
-                <div className="mt-4 space-y-3">
+                <div className="mt-4 space-y-3 z-[1000]">
                     <div className="text-xs text-muted-foreground">
                         Step 1: Describe your image.
                     </div>

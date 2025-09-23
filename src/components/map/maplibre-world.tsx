@@ -5,13 +5,23 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { GridPlacement } from "./types";
 import { TopLeftControls } from "./top-left-controls";
 import { TopRightControls } from "./top-right-controls"; // ⬅️ add this import
+import { BottomCenterAction } from "./bottom-center-action";
+import { toast } from "sonner";
+import { SelectionModal, type TileMeta } from "./selection-modal";
 
 // ---- CONFIG ----
 const TILE_ZOOM = 5;
 const STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 // ----------------
+// === Checkpoint spec constants (MapLibre/GL) ===
+const TILE_SIZE = 256;                 // your canvas/generation tile size
+const MIN_INTERACT_ZOOM = 17.0;        // block tagging below this
+const TILES_VISIBLE_ZOOM = 16.5;       // hide gp_* overlays below this
+const CLICK_DEBOUNCE_MS = 250;
+const MOVE_TOL_PX = 5;                 // dragging vs click
 
-// Slippy helpers
+
+// ---------------- Slippy helpers ----------------
 function lon2tile(lon: number, z: number) {
     return Math.floor(((lon + 180) / 360) * Math.pow(2, z));
 }
@@ -188,6 +198,76 @@ function installDeclutterHooks(map: any) {
     });
     map.once("remove", () => { if (raf !== null) cancelAnimationFrame(raf); });
 }
+// -------------- Checkpoint helpers --------------
+type Checkpoint = { x: number; y: number; lat: number; lng: number; zoom: number; placedAt: number };
+const MUTE_KEY = "genplace:map:mute";
+
+function makeMarkerEl() {
+    const el = document.createElement("div");
+    el.setAttribute("role", "img");
+    el.setAttribute("aria-label", "Checkpoint");
+    el.style.width = "26px";
+    el.style.height = "26px";
+    el.style.borderRadius = "9999px";
+    el.style.background = "radial-gradient(circle at 50% 45%, rgba(255,255,255,0.25) 0 30%, hsl(217 91% 60%) 30% 100%)";
+    el.style.boxShadow = "0 8px 24px hsla(217, 91%, 60%, .25), 0 0 0 1px rgba(255,255,255,.15) inset";
+    el.style.transform = "translateY(-6px) scale(0.92)";
+    el.style.transition = "transform 180ms ease, opacity 180ms ease";
+    el.style.opacity = "0";
+    // small “stem” to imply bottom-center anchor
+    const stem = document.createElement("div");
+    stem.style.position = "absolute";
+    stem.style.left = "50%";
+    stem.style.bottom = "-6px";
+    stem.style.transform = "translateX(-50%)";
+    stem.style.width = "6px";
+    stem.style.height = "6px";
+    stem.style.borderRadius = "9999px";
+    stem.style.background = "hsl(217 91% 60%)";
+    stem.style.boxShadow = "0 6px 12px hsla(217, 91%, 60%, .35)";
+    el.appendChild(stem);
+    // pop-in (respect reduced motion)
+    const prefersReduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    requestAnimationFrame(() => {
+        el.style.opacity = "1";
+        el.style.transform = prefersReduced ? "translateY(-6px)" : "translateY(-6px) scale(1)";
+    });
+    return el;
+}
+
+// Simple synth “pop” (no asset needed)
+let audioCtx: AudioContext | null = null;
+function playPop(isMuted: boolean) {
+    if (isMuted) return;
+    try {
+        audioCtx = audioCtx || new (window.AudioContext || (window as any).webkitAudioContext)();
+        const ctx = audioCtx;
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = "triangle";
+        o.frequency.value = 420; // start
+        const now = ctx.currentTime;
+        o.frequency.exponentialRampToValueAtTime(220, now + 0.12);
+        g.gain.setValueAtTime(0.0001, now);
+        g.gain.exponentialRampToValueAtTime(0.25, now + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+        o.connect(g).connect(ctx.destination);
+        o.start(now); o.stop(now + 0.2);
+        // light haptic, if available
+        if ("vibrate" in navigator) navigator.vibrate?.(10);
+    } catch { }
+}
+
+// Snap map click to nearest TILE_SIZE grid at the current zoom (uses project/unproject)
+function snapToTile(map: any, lng: number, lat: number, zoom: number) {
+    const p = map.project([lng, lat], zoom); // world px at this zoom
+    const tx = Math.round(p.x / TILE_SIZE);
+    const ty = Math.round(p.y / TILE_SIZE);
+    const cx = (tx + 0.5) * TILE_SIZE;
+    const cy = (ty + 0.5) * TILE_SIZE;
+    const snapped = map.unproject({ x: cx, y: cy }, zoom);
+    return { x: tx, y: ty, lat: snapped.lat, lng: snapped.lng };
+}
 
 // === Component ===
 type Props = {
@@ -195,65 +275,209 @@ type Props = {
     onClickEmpty: (xy: { x: number; y: number }) => void;
     onClickPlacement: (p: GridPlacement) => void;
     sizePx: 128 | 256 | 512;
+    onCreate?: () => void;            // ⬅️ new: open prompt drawer
+    hasTokens?: boolean;              // ⬅️ new: control disabled state
+    cooldownLabel?: string;           // ⬅️ new: e.g. "Out of tokens — regenerates in 2:14"
 };
 
-export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement }: Props) {
+export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
+    sizePx,
+    onCreate,
+    hasTokens = true,
+    cooldownLabel = "You're out of tokens — regenerates soon",
+
+}: Props) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<any>(null);
     const center = useMemo<[number, number]>(() => [0, 20], []);
     const indexRef = useRef<Map<string, GridPlacement>>(new Map());
+
     const [overlaysVisible, setOverlaysVisible] = useState(true);
+
     // Track what we currently have on the map to avoid churn
+    // track gp_* layers to toggle quickly
     const currentIdsRef = useRef<Set<string>>(new Set());
-    const currentMetaRef = useRef<Map<string, string>>(new Map()); // id -> fingerprint
+    const currentMetaRef = useRef<Map<string, string>>(new Map());
     const lastSigRef = useRef<string>("");
 
+    // --- checkpoint state ---
+    const [checkpoint, setCheckpoint] = useState<Checkpoint | undefined>(undefined);
+    const markerRef = useRef<any>(null);  // maplibregl.Marker
+    const markerElRef = useRef<HTMLDivElement | null>(null);
+    const lastDownRef = useRef<{ x: number; y: number } | null>(null);
+    const lastPlacementAtRef = useRef<number>(0);
+    const [isMuted, setIsMuted] = useState<boolean>(() => {
+        if (typeof window === "undefined") return false;
+        return localStorage.getItem(MUTE_KEY) === "1";
+    });
+
+    // --- selection modal state ---
+    const [selectionTile, setSelectionTile] = useState<TileMeta | null>(null);
+    const [selectionOpen, setSelectionOpen] = useState(false);
+
+    // helper for “build meta” (dummy country for now)
+    const toTileMeta = (x: number, y: number, z: number): TileMeta => ({
+        x, y, zoom: z,
+        countryName: undefined,       // MVP: unknown
+        countryFlagEmoji: undefined,  // MVP: unknown
+        painted: false,               // MVP: assume unpainted
+    });
+
+    // share handler
+    const shareTile = async (tile: TileMeta) => {
+        try {
+            const url = new URL(window.location.href);
+            url.pathname = "/map";
+            url.searchParams.set("x", String(tile.x));
+            url.searchParams.set("y", String(tile.y));
+            url.searchParams.set("z", String(tile.zoom));
+            await navigator.clipboard.writeText(url.toString());
+            toast.success("Link copied", { duration: 1800 });
+        } catch {
+            toast.error("Couldn't copy link");
+        }
+    };
+
+    // open drawer with coords (Option A)
+    const createForTile = (tile: TileMeta) => {
+        setSelectionOpen(false);
+        // Use your existing “Create” integration:
+        // Fire a targeted event with coords, MapPage will open PromptDrawer preset.
+        window.dispatchEvent(new CustomEvent("genplace:create:tile", { detail: { x: tile.x, y: tile.y } }));
+        // Also fire the generic event if you want to keep both flows working:
+        if (!onCreate) window.dispatchEvent(new CustomEvent("genplace:create"));
+        onCreate?.();
+    };
+
+    useEffect(() => {
+        // close modal if user zooms out below threshold
+        const map = mapRef.current;
+        if (!map) return;
+        const onZoomEnd = () => {
+            const z = map.getZoom();
+            if (z < MIN_INTERACT_ZOOM) setSelectionOpen(false);
+        };
+        map.on("zoomend", onZoomEnd);
+        return () => { map.off("zoomend", onZoomEnd); };
+    }, []);
+
+
+    // Mount map
     useEffect(() => {
         let destroyed = false;
         (async () => {
             const lib = await import("maplibre-gl");
             if (destroyed) return;
             const maplibregl = (lib as any).default ?? lib;
-
             const map = new maplibregl.Map({
                 container: containerRef.current!,
                 style: STYLE_URL,
-                center,
-                zoom: 3,
-                attributionControl: true,
-                pitch: 0,
-                maxPitch: 0,
-                bearing: 0,
-                dragRotate: false,
-                pitchWithRotate: false,
-                touchPitch: false,
+                center, zoom: 3, attributionControl: true,
+                pitch: 0, maxPitch: 0, bearing: 0,
+                dragRotate: false, pitchWithRotate: false, touchPitch: false,
             });
             mapRef.current = map;
 
             map.on("load", () => {
                 installDeclutterHooks(map);
                 map.getCanvas().style.cursor = "grab";
+                const maplibregl = (lib as any).default ?? lib;
 
-                map.on("click", (e: any) => {
-                    const lng = e.lngLat.lng;
-                    const lat = e.lngLat.lat;
-                    const x = lon2tile(lng, TILE_ZOOM);
-                    const y = lat2tile(lat, TILE_ZOOM);
-                    const hit = indexRef.current.get(`${x}:${y}:${TILE_ZOOM}`);
-                    hit ? onClickPlacement(hit) : onClickEmpty({ x, y });
+                // ----- low-zoom visibility gate for gp_* overlays -----
+                const syncOverlayVisibilityForZoom = () => {
+                    const z = map.getZoom();
+                    const allowedByZoom = z >= TILES_VISIBLE_ZOOM;
+                    for (const id of currentIdsRef.current) {
+                        const layerId = `${id}_layer`;
+                        if (map.getLayer(layerId)) {
+                            const shouldShow = overlaysVisible && allowedByZoom;
+                            map.setPaintProperty(layerId, "raster-opacity", shouldShow ? 1 : 0);
+                        }
+                    }
+                };
+                map.on("zoomend", syncOverlayVisibilityForZoom);
+
+                // ----- pointer handlers for click vs drag -----
+                map.on("mousedown", (e: any) => {
+                    lastDownRef.current = { x: e.point.x, y: e.point.y };
                 });
 
+                map.on("click", async (e: any) => {
+                    const now = Date.now();
+                    if (now - lastPlacementAtRef.current < CLICK_DEBOUNCE_MS) return;
+
+                    // treat it as a click only if not dragged
+                    const d0 = lastDownRef.current;
+                    const moved = d0 ? Math.hypot(e.point.x - d0.x, e.point.y - d0.y) : 0;
+                    if (moved > MOVE_TOL_PX) return;
+
+                    const z = map.getZoom();
+                    if (z < MIN_INTERACT_ZOOM) {
+                        toast.message("You need to zoom in to select a tile.", { duration: 2000 });
+                        return;
+                    }
+
+                    // snap to tile @ current zoom
+                    const { lng, lat } = e.lngLat;
+                    const snapped = snapToTile(map, lng, lat, z);
+
+                    const cp: Checkpoint = {
+                        x: snapped.x, y: snapped.y, lng: snapped.lng, lat: snapped.lat, zoom: z, placedAt: now,
+                    };
+                    setCheckpoint(cp);
+                    lastPlacementAtRef.current = now;
+
+                    // add/update marker
+                    const lib = (window as any).maplibregl || (await import("maplibre-gl")).default;
+                    if (!markerRef.current) {
+                        const el = makeMarkerEl();
+                        markerElRef.current = el;
+                        markerRef.current = new lib.Marker({ element: el, anchor: "bottom" })
+                            .setLngLat([cp.lng, cp.lat])
+                            .addTo(map);
+                    } else {
+                        markerRef.current.setLngLat([cp.lng, cp.lat]);
+                        // quick re-pop animation
+                        const el = markerElRef.current;
+                        if (el) {
+                            el.style.transform = "translateY(-6px) scale(0.92)";
+                            requestAnimationFrame(() => { el.style.transform = "translateY(-6px) scale(1)"; });
+                        }
+                    }
+
+                    // feedback
+                    playPop(isMuted);
+                    toast.success("Checkpoint set.", { duration: 1800 });
+
+                    // NEW: open selection modal with meta
+                    setSelectionTile(toTileMeta(cp.x, cp.y, z));
+                    setSelectionOpen(true);
+                });
+
+                // Resize
                 const onResize = () => map.resize();
                 window.addEventListener("resize", onResize);
                 map.once("remove", () => window.removeEventListener("resize", onResize));
+
+                // Keyboard: ESC clears checkpoint
+                const onKey = (ev: KeyboardEvent) => {
+                    if (ev.key === "Escape") {
+                        setCheckpoint(undefined);
+                        if (markerRef.current) { markerRef.current.remove(); markerRef.current = null; markerElRef.current = null; }
+                    }
+                };
+                window.addEventListener("keydown", onKey);
+                map.once("remove", () => window.removeEventListener("keydown", onKey));
+
+                // initial sync for gp_* opacity vs zoom
+                map.once("idle", syncOverlayVisibilityForZoom);
             });
-            // If the style is replaced (e.g., switch styles), clear local caches.
-            // Our next placements sync will re-add only what's needed.
+
+            // prune cache when style changes
             map.on("styledata", () => {
                 const style = map.getStyle?.();
                 if (!style || !style.sources) return;
                 const existing = new Set(Object.keys(style.sources).filter((k) => k.startsWith("gp_")));
-                // prune anything not in the style anymore
                 for (const id of currentIdsRef.current) {
                     if (!existing.has(id)) {
                         currentIdsRef.current.delete(id);
@@ -261,7 +485,6 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement }: Pr
                     }
                 }
             });
-
         })();
 
         return () => {
@@ -271,7 +494,60 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement }: Pr
                 mapRef.current = null;
             }
         };
-    }, [center, onClickEmpty, onClickPlacement]);
+    }, [center]);
+
+
+    // Deep link: /map?x=&y=&z=
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        const map = mapRef.current;
+        if (!map) return;
+        const url = new URL(window.location.href);
+        const qx = url.searchParams.get("x");
+        const qy = url.searchParams.get("y");
+        const qz = url.searchParams.get("z");
+        if (!qx || !qy || !qz) return;
+
+        const x = Number(qx), y = Number(qy), z = Number(qz);
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return;
+
+        // derive lat/lng for tile center at z
+        const worldPxX = (x + 0.5) * TILE_SIZE;
+        const worldPxY = (y + 0.5) * TILE_SIZE;
+        const { lng, lat } = map.unproject({ x: worldPxX, y: worldPxY }, z);
+        if (z >= MIN_INTERACT_ZOOM) {
+            // place marker & center
+            setTimeout(() => {
+                flySmooth(map, [lng, lat], Math.max(z, MIN_INTERACT_ZOOM + 0.2), { speed: 0.65, curve: 1.35 });
+                // place marker after flight begins
+                setTimeout(() => {
+                    const el = markerElRef.current ?? makeMarkerEl();
+                    if (!markerRef.current) {
+                        const lib = (window as any).maplibregl;
+                        markerRef.current = new lib.Marker({ element: el, anchor: "bottom" })
+                            .setLngLat([lng, lat])
+                            .addTo(map);
+                        markerElRef.current = el;
+                    } else {
+                        markerRef.current.setLngLat([lng, lat]);
+                    }
+                    setCheckpoint({ x, y, lng, lat, zoom: z, placedAt: Date.now() });
+                }, 250);
+            }, 200);
+        } else {
+            toast.message("Zoom in to select a tile.");
+        }
+    }, []);
+
+    // Persist mute setting if you add a toggle later
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        try { localStorage.setItem(MUTE_KEY, isMuted ? "1" : "0"); } catch { }
+    }, [isMuted]);
+
+
+    // ----------------- placements sync (unchanged, but with zoom-gate) -----------------
+
 
     // Sync placements → add/update/remove only what's necessary
     // Cache last placements signature to avoid doing work when nothing changed
@@ -481,6 +757,30 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement }: Pr
                 onRandom={flyRandom}
             />
             {/* Or: <TopRightControls loginHref="/auth" /> */}
+
+            {/* Bottom-center Create button */}
+            {/* Bottom-center Create button — hidden when modal is open */}
+            {!selectionOpen && (
+                <BottomCenterAction
+                    label="Create"
+                    icon="wand"
+                    onClick={onCreate ?? (() => window.dispatchEvent(new CustomEvent("genplace:create")))}
+                    disabled={!hasTokens}
+                    cooldownText={cooldownLabel}
+                    tooltip="Type a prompt → generate → place it on the map"
+                />
+            )}
+
+            {/* NEW: Bottom-center Selection Modal */}
+            <SelectionModal
+                open={!!selectionOpen && !!selectionTile}
+                onClose={() => setSelectionOpen(false)}
+                tile={selectionTile}
+                onPrimary={createForTile}
+                onShare={shareTile}
+                canCreate={!!hasTokens}
+                disabledReason={cooldownLabel}
+            />
         </div>
     );
 }
