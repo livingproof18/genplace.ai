@@ -49,6 +49,83 @@ const placementsSig = (list: GridPlacement[]) =>
         .sort()
         .join(";");
 
+// ------
+// ---- camera animation helpers ----
+// -------- Smooth flight helper (wplace-style) --------
+function easeInOutCubic(t: number) {
+    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+/**
+ * flySmooth:
+ * Uses map.flyTo (zoom + pan together) with tuned params to emulate:
+ *   - gentle zoom-out while starting to pan
+ *   - steady travel
+ *   - smooth decelerating zoom-in at destination
+ *
+ * center: [lng, lat]
+ * finalZoom: number (e.g., 11 for locate, ~4.5 for explore)
+ * options (optional):
+ *   - speed: lower = slower (default 0.6)
+ *   - curve: flight curvature (default 1.35)
+ *   - maxDuration: cap long flights (ms) — optional
+ *   - For very long jumps (e.g., London → Sydney), consider setting maxDuration ~2500–3200ms so it doesn’t take too long.
+ */
+function flySmooth(
+    map: any,
+    center: [number, number],
+    finalZoom: number,
+    options?: { speed?: number; curve?: number; maxDuration?: number }
+) {
+    if (!map) return;
+
+    const { speed = 0.7, curve = 1.35, maxDuration } = options || {};
+
+    if (typeof map.flyTo === "function") {
+        map.flyTo({
+            center,
+            zoom: finalZoom,
+            speed,         // default ~1.2; lower => slower, smoother
+            curve,         // default ~1.42; tweak shape of zoom path
+            easing: easeInOutCubic,
+            bearing: 0,
+            pitch: 0,
+            // By default duration is computed from distance & speed/curve.
+            // You can cap it for very long hops:
+            ...(maxDuration ? { maxDuration } : {}),
+            // essential: true  // (optional) mark as essential for prefers-reduced-motion
+        });
+        return;
+    }
+
+    // Fallback (older builds): two-step ease
+    const currentZoom = map.getZoom?.() ?? 3;
+    const midZoom = Math.max(2.2, Math.min(currentZoom, finalZoom) - 2.8);
+
+    // Step A: soften by easing out to a mid zoom
+    map.easeTo({
+        zoom: midZoom,
+        duration: 450,
+        easing: easeInOutCubic,
+        bearing: 0,
+        pitch: 0,
+    });
+
+    // Step B: slide + ease in to target
+    map.once("moveend", () => {
+        map.easeTo({
+            center,
+            zoom: finalZoom,
+            duration: 900,
+            easing: easeInOutCubic,
+            bearing: 0,
+            pitch: 0,
+        });
+    });
+}
+// -----------------------------------------------------
+
+
 
 
 // === Declutter helpers (style-aware & gentle) ===
@@ -347,6 +424,45 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement }: Pr
         window.location.href = "/login";
     };
 
+    // NEW: locate me
+    // Locate me -> zoom-out → slide → zoom-in
+    // Locate me
+    const locateMe = () => {
+        if (!("geolocation" in navigator)) {
+            window.alert("Geolocation is not supported by your browser.");
+            return;
+        }
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                const { latitude, longitude } = pos.coords;
+                // A local “land” zoom level feels right around 11
+                flySmooth(mapRef.current, [longitude, latitude], 11, {
+                    speed: 0.7,      // slower & smoother
+                    curve: 1.35,     // gentle curve
+                    // maxDuration: 2500, // optionally cap long flights
+                });
+            },
+            (err) => {
+                console.warn("Geolocation error:", err);
+                window.alert("Unable to get your location. Please allow location access in your browser.");
+            },
+            { enableHighAccuracy: false, maximumAge: 10_000, timeout: 7_000 }
+        );
+    };
+
+    // Random explorer
+    const flyRandom = () => {
+        const lat = (Math.random() * 160) - 80;   // -80..+80
+        const lng = (Math.random() * 360) - 180;  // -180..+180
+        // Regional zoom feels explorative around ~4.5
+        flySmooth(mapRef.current, [lng, lat], 4.5, {
+            speed: 0.65,   // slightly slower for long hops
+            curve: 1.35,
+            // maxDuration: 3000,
+        });
+    };
+
+
     return (
         <div ref={containerRef} className="h-dvh w-dvw" style={{ position: "relative" }}>
             {/* Floating control bar (top-left) */}
@@ -360,7 +476,10 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement }: Pr
             />
 
             {/* Top-right controls (column) */}
-            <TopRightControls onLogin={onLogin} />
+            <TopRightControls onLogin={onLogin}
+                onLocateMe={locateMe}
+                onRandom={flyRandom}
+            />
             {/* Or: <TopRightControls loginHref="/auth" /> */}
         </div>
     );
