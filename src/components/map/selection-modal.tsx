@@ -1,9 +1,9 @@
 // src/components/map/selection-modal.tsx
 "use client";
 
+import * as React from "react";
 import { X, MapPin, Wand2, Share2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import * as React from "react";
 
 export type TileMeta = {
     x: number;
@@ -37,95 +37,110 @@ export function SelectionModal({
     className,
 }: Props) {
     React.useEffect(() => {
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key === "Escape") onClose();
-        };
+        const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
         if (open) window.addEventListener("keydown", onKey);
         return () => window.removeEventListener("keydown", onKey);
     }, [open, onClose]);
 
     if (!open || !tile) return null;
 
-    const locationLabel =
-        tile.countryName ? `${tile.countryName} ${tile.countryFlagEmoji ?? ""}` : "Unknown location";
+    const locationLabel = tile.countryName
+        ? `${tile.countryName} ${tile.countryFlagEmoji ?? ""}`
+        : "Unknown location";
 
     return (
         <div
             role="dialog"
             aria-label="Selected tile details"
             className={cn(
-                "fixed left-1/2 -translate-x-1/2 z-[1100] bottom-6 sm:bottom-7",
-                "max-w-[640px] w-[min(92vw,640px)]",
-                "rounded-2xl glass ring-gradient shadow-lg backdrop-blur",
-                "px-4 py-3 md:px-5 md:py-4",
-                "motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95",
+                // Positioning: bottom-center, safe-area aware
+                "fixed left-1/2 -translate-x-1/2 z-[1100]",
+                "w-[min(92vw,680px)]",
+                "bottom-[max(1rem,env(safe-area-inset-bottom))]",
+                // Solid light card (+ shadow) regardless of page dark mode
+                "rounded-2xl bg-white text-black shadow-[0_12px_40px_rgba(0,0,0,.35)]",
+                "border border-black/10",
+                // Padding & entry motion
+                "px-5 py-4 md:px-6 md:py-5",
+                "motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-2",
                 className
             )}
         >
             {/* Header */}
-            <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2 min-w-0">
-                    <div className="grid place-items-center rounded-full bg-primary/15 text-primary h-8 w-8">
-                        <MapPin className="h-4 w-4" />
+            <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                    <div className="grid place-items-center rounded-full bg-blue-100 text-blue-600 h-9 w-9">
+                        <MapPin className="h-4.5 w-4.5" />
                     </div>
-                    <div className="flex items-center gap-2 min-w-0 text-sm md:text-base">
-                        <span className="text-muted-foreground">Tile:</span>
-                        <span className="font-mono tabular-nums">{tile.x},{tile.y}</span>
-                        <span className="opacity-40">•</span>
-                        <span className="truncate">{locationLabel}</span>
+
+                    <div className="min-w-0">
+                        {/* Top line: larger, clearer */}
+                        <div className="flex flex-wrap items-center gap-2 text-[15px] md:text-base font-medium leading-tight">
+                            <span className="opacity-70">Pixel:</span>
+                            <span className="font-mono tabular-nums">{tile.x},{tile.y}</span>
+                            <span className="opacity-40">•</span>
+                            <span className="truncate">{locationLabel}</span>
+                        </div>
+
+                        {/* Sub line: painted / not painted */}
+                        <div className="mt-1.5 text-sm text-black/70">
+                            {tile.painted && tile.paintedBy ? (
+                                <>
+                                    Painted by{" "}
+                                    <span className="text-black font-medium">@{tile.paintedBy.username}</span>{" "}
+                                    <span className="opacity-70">#{tile.paintedBy.userId}</span>
+                                </>
+                            ) : (
+                                <>Not painted</>
+                            )}
+                        </div>
                     </div>
                 </div>
 
+                {/* Close */}
                 <button
                     aria-label="Close selection"
                     onClick={onClose}
-                    className="h-8 w-8 grid place-items-center rounded-full hover:bg-white/10 transition"
+                    className="h-8 w-8 grid place-items-center rounded-full text-black/70 hover:text-black
+                     hover:bg-black/5 active:bg-black/10 transition-colors"
                 >
                     <X className="h-4 w-4" />
                 </button>
             </div>
 
-            {/* Body */}
-            <div className="mt-2 text-sm text-muted-foreground">
-                {tile.painted && tile.paintedBy ? (
-                    <span>
-                        Painted by <span className="text-foreground">@{tile.paintedBy.username}</span>{" "}
-                        <span className="opacity-70">#{tile.paintedBy.userId}</span>
-                    </span>
-                ) : (
-                    <span>Not painted</span>
-                )}
-            </div>
-
             {/* Actions */}
-            <div className="mt-3 flex flex-col sm:flex-row gap-2">
+            <div className="mt-4 flex flex-wrap items-center gap-2.5">
+                {/* Create (primary) — auto width, rounded-pill */}
                 <button
                     aria-label={`Create new image for tile ${tile.x},${tile.y}`}
                     title={canCreate ? "Create an image for this tile" : disabledReason}
                     onClick={canCreate ? () => onPrimary(tile) : undefined}
                     disabled={!canCreate}
                     className={cn(
-                        "inline-flex items-center justify-center gap-2 rounded-xl px-4 h-11 w-full sm:flex-1",
-                        "bg-primary text-primary-foreground border border-white/10 btn-glow",
-                        "transition motion-safe:active:scale-[0.98] hover:brightness-110",
-                        !canCreate &&
-                        "bg-primary/50 text-primary-foreground/70 cursor-not-allowed hover:brightness-100"
+                        "inline-flex items-center gap-2 rounded-full px-5 h-11",
+                        "bg-[hsl(var(--primary))] text-white",
+                        "shadow-[0_6px_20px_rgba(59,130,246,.35)]",
+                        "transition-colors motion-safe:active:scale-[0.99]",
+                        "hover:brightness-105",
+                        !canCreate && "opacity-60 cursor-not-allowed hover:brightness-100"
                     )}
                 >
-                    <Wand2 className="h-4 w-4" />
-                    <span className="font-medium">Create</span>
+                    <Wand2 className="h-4.5 w-4.5" />
+                    <span className="text-[15px] font-semibold">Create</span>
                 </button>
 
+                {/* Share (neutral pill) */}
                 <button
                     aria-label={`Share link to tile ${tile.x},${tile.y}`}
                     onClick={() => onShare(tile)}
                     className={cn(
-                        "inline-flex items-center justify-center gap-2 rounded-xl px-4 h-11 w-full sm:flex-1",
-                        "border bg-card/60 hover:bg-card/80 transition"
+                        "inline-flex items-center gap-2 rounded-full px-5 h-11",
+                        "bg-gray-100 text-gray-900 border border-black/10",
+                        "hover:bg-gray-200 active:bg-gray-200/90 transition-colors"
                     )}
                 >
-                    <Share2 className="h-4 w-4" />
-                    <span className="font-medium">Share</span>
+                    <Share2 className="h-4.5 w-4.5" />
+                    <span className="text-[15px] font-medium">Share</span>
                 </button>
             </div>
         </div>

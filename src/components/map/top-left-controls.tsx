@@ -22,54 +22,54 @@ export function TopLeftControls({
 }: Props) {
     return (
         <div className="pointer-events-none fixed top-3 left-3 z-[1000] flex gap-2">
-            {/* Help / Info */}
+            {/* Help */}
             <button
                 onClick={onHelp}
-                className="pointer-events-auto h-11 w-11 grid place-items-center rounded-full border bg-background/70 backdrop-blur shadow-md hover:bg-background/90 transition"
+                className="pointer-events-auto control-glass control-icon"
                 aria-label="Help / Info"
                 title="Help / Info"
             >
-                <HelpCircle className="h-5 w-5" />
+                <HelpCircle className="icon-4" />
             </button>
 
             {/* Zoom group */}
-            <div className="pointer-events-auto flex rounded-full border bg-background/70 backdrop-blur shadow-md overflow-hidden">
+            <div className="pointer-events-auto control-glass flex overflow-hidden">
                 <button
                     onClick={onZoomIn}
-                    className="h-11 w-11 grid place-items-center hover:bg-background/90 transition"
+                    className="control-icon"
                     aria-label="Zoom in"
                     title="Zoom in"
                 >
-                    <Plus className="h-5 w-5" />
+                    <Plus className="icon-4" />
                 </button>
                 <button
                     onClick={onZoomOut}
-                    className="h-11 w-11 grid place-items-center hover:bg-background/90 transition border-l"
+                    className="control-icon border-l border-white/10"
                     aria-label="Zoom out"
                     title="Zoom out"
                 >
-                    <Minus className="h-5 w-5" />
+                    <Minus className="icon-4" />
                 </button>
             </div>
 
-            {/* Social */}
+            {/* Share */}
             <button
                 onClick={onShare}
-                className="pointer-events-auto h-11 w-11 grid place-items-center rounded-full border bg-background/70 backdrop-blur shadow-md hover:bg-background/90 transition"
+                className="pointer-events-auto control-glass control-icon"
                 aria-label="Share"
                 title="Share"
             >
-                <Share2 className="h-5 w-5" />
+                <Share2 className="icon-4" />
             </button>
 
             {/* Show/Hide overlays */}
             <button
                 onClick={onToggleOverlays}
-                className="pointer-events-auto h-11 w-11 grid place-items-center rounded-full border bg-background/70 backdrop-blur shadow-md hover:bg-background/90 transition"
+                className="pointer-events-auto control-glass control-icon"
                 aria-label={overlaysVisible ? "Hide overlay" : "Show overlay"}
                 title={overlaysVisible ? "Hide overlay" : "Show overlay"}
             >
-                {overlaysVisible ? <Eye className="h-5 w-5" /> : <EyeOff className="h-5 w-5" />}
+                {overlaysVisible ? <Eye className="icon-4" /> : <EyeOff className="icon-4" />}
             </button>
         </div>
     );

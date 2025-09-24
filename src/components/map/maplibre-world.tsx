@@ -8,6 +8,7 @@ import { TopRightControls } from "./top-right-controls"; // ⬅️ add this impo
 import { BottomCenterAction } from "./bottom-center-action";
 import { toast } from "sonner";
 import { SelectionModal, type TileMeta } from "./selection-modal";
+import { Info } from "lucide-react";
 
 // ---- CONFIG ----
 const TILE_ZOOM = 5;
@@ -203,18 +204,29 @@ type Checkpoint = { x: number; y: number; lat: number; lng: number; zoom: number
 const MUTE_KEY = "genplace:map:mute";
 
 function makeMarkerEl() {
-    const el = document.createElement("div");
-    el.setAttribute("role", "img");
-    el.setAttribute("aria-label", "Checkpoint");
-    el.style.width = "26px";
-    el.style.height = "26px";
-    el.style.borderRadius = "9999px";
-    el.style.background = "radial-gradient(circle at 50% 45%, rgba(255,255,255,0.25) 0 30%, hsl(217 91% 60%) 30% 100%)";
-    el.style.boxShadow = "0 8px 24px hsla(217, 91%, 60%, .25), 0 0 0 1px rgba(255,255,255,.15) inset";
-    el.style.transform = "translateY(-6px) scale(0.92)";
-    el.style.transition = "transform 180ms ease, opacity 180ms ease";
-    el.style.opacity = "0";
-    // small “stem” to imply bottom-center anchor
+    // Root given to maplibregl.Marker – DO NOT apply transform on this element.
+    const root = document.createElement("div");
+    root.setAttribute("role", "img");
+    root.setAttribute("aria-label", "Checkpoint");
+    root.style.width = "0px";   // width/height come from inner, root stays transform-neutral
+    root.style.height = "0px";
+
+    // Visual inner bubble (we animate this one)
+    const inner = document.createElement("div");
+    inner.style.position = "relative";
+    inner.style.width = "26px";
+    inner.style.height = "26px";
+    inner.style.borderRadius = "9999px";
+    inner.style.background =
+        "radial-gradient(circle at 50% 45%, rgba(255,255,255,0.25) 0 30%, hsl(217 91% 60%) 30% 100%)";
+    inner.style.boxShadow =
+        "0 8px 24px hsla(217, 91%, 60%, .25), 0 0 0 1px rgba(255,255,255,.15) inset";
+    inner.style.transformOrigin = "50% 100%"; // scale from bottom-center
+    inner.style.willChange = "transform, opacity";
+    inner.style.opacity = "0";
+    inner.style.transform = "scale(0.92)";
+
+    // little stem
     const stem = document.createElement("div");
     stem.style.position = "absolute";
     stem.style.left = "50%";
@@ -225,14 +237,20 @@ function makeMarkerEl() {
     stem.style.borderRadius = "9999px";
     stem.style.background = "hsl(217 91% 60%)";
     stem.style.boxShadow = "0 6px 12px hsla(217, 91%, 60%, .35)";
-    el.appendChild(stem);
-    // pop-in (respect reduced motion)
+
+    inner.appendChild(stem);
+    root.appendChild(inner);
+
+    // pop-in on the INNER only (respect reduced motion)
     const prefersReduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     requestAnimationFrame(() => {
-        el.style.opacity = "1";
-        el.style.transform = prefersReduced ? "translateY(-6px)" : "translateY(-6px) scale(1)";
+        inner.style.opacity = "1";
+        inner.style.transform = prefersReduced ? "none" : "scale(1)";
     });
-    return el;
+
+    // stash a reference to the inner for later re-pop animations
+    (root as any).__inner = inner;
+    return root as HTMLDivElement;
 }
 
 // Simple synth “pop” (no asset needed)
@@ -413,7 +431,13 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
 
                     const z = map.getZoom();
                     if (z < MIN_INTERACT_ZOOM) {
-                        toast.message("You need to zoom in to select a tile.", { duration: 2000 });
+                        toast.info("You need to zoom in to select a tile.", {
+                            duration: 2200,
+                            icon: <Info className="h-4 w-4" />,
+                            // closeButton is already globally on, but you can add per-toast too:
+                            // closeButton: true,
+                            // description: "Zoom closer until tiles are visible.",
+                        });
                         return;
                     }
 
@@ -429,25 +453,37 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
 
                     // add/update marker
                     const lib = (window as any).maplibregl || (await import("maplibre-gl")).default;
+                    // creation
                     if (!markerRef.current) {
                         const el = makeMarkerEl();
                         markerElRef.current = el;
-                        markerRef.current = new lib.Marker({ element: el, anchor: "bottom" })
+
+                        // Use the SAME maplibregl instance used to create the map:
+                        const gl = (mapRef.current as any)._gl || (await import("maplibre-gl")).default;
+                        markerRef.current = new gl.Marker({
+                            element: el,
+                            anchor: "center",
+                            offset: [0, 6], // lift visual a little so stem touches the coordinate
+                        })
                             .setLngLat([cp.lng, cp.lat])
                             .addTo(map);
                     } else {
                         markerRef.current.setLngLat([cp.lng, cp.lat]);
-                        // quick re-pop animation
-                        const el = markerElRef.current;
-                        if (el) {
-                            el.style.transform = "translateY(-6px) scale(0.92)";
-                            requestAnimationFrame(() => { el.style.transform = "translateY(-6px) scale(1)"; });
+
+                        // smooth re-pop on INNER, not the root
+                        const el = markerElRef.current as any;
+                        const inner: HTMLDivElement | undefined = el?.__inner;
+                        if (inner) {
+                            inner.style.transition = "transform 180ms ease";
+                            inner.style.transform = "scale(0.92)";
+                            requestAnimationFrame(() => { inner.style.transform = "scale(1)"; });
                         }
                     }
 
+
                     // feedback
                     playPop(isMuted);
-                    toast.success("Checkpoint set.", { duration: 1800 });
+                    // toast.success("Checkpoint set.", { duration: 1800 });
 
                     // NEW: open selection modal with meta
                     setSelectionTile(toTileMeta(cp.x, cp.y, z));
@@ -535,7 +571,7 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                 }, 250);
             }, 200);
         } else {
-            toast.message("Zoom in to select a tile.");
+            // toast.message("Zoom in to select a tile.");
         }
     }, []);
 
