@@ -16,8 +16,8 @@ const STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 // ----------------
 // === Checkpoint spec constants (MapLibre/GL) ===
 const TILE_SIZE = 256;                 // your canvas/generation tile size
-const MIN_INTERACT_ZOOM = 17.0;        // block tagging below this
-const TILES_VISIBLE_ZOOM = 16.5;       // hide gp_* overlays below this
+const MIN_INTERACT_ZOOM = 11.0;        // block tagging below this
+const TILES_VISIBLE_ZOOM = 10.7;       // hide gp_* overlays below this
 const CLICK_DEBOUNCE_MS = 250;
 const MOVE_TOL_PX = 5;                 // dragging vs click
 
@@ -55,20 +55,19 @@ function tileBounds(x: number, y: number, z: number) {
     ] as [[number, number], [number, number], [number, number], [number, number]];
 }
 
-// Unique id for our art tile
-const artId = (x: number, y: number, z: number) => `gp_${x}_${y}_${z}`;
 
-// Fingerprint a placement so we know if the image/coords actually changed
-const fpPlacement = (p: GridPlacement) =>
-    `${p.url}|${p.x}|${p.y}|${p.z}`;
+// A *display-only* global pixel grid like wplace (huge resolution).
+// MapLibre's world size at zoom Z is 512 * 2^Z pixels.
+// Z=22 → 2,147,483,648 px per axis (~4.6e18 cells total) — plenty high.
+const CANVAS_PIXEL_Z = 22;
 
-// Build a simple signature for placements we actually render
-const placementsSig = (list: GridPlacement[]) =>
-    list
-        .filter(p => p.z === TILE_ZOOM)
-        .map(p => `${p.x},${p.y},${p.z}:${p.url}`)
-        .sort()
-        .join(";");
+// lat/lng → global canvas pixel (integer) at CANVAS_PIXEL_Z
+function latLngToCanvasPixel(map: any, lng: number, lat: number) {
+    const p = map.project([lng, lat], CANVAS_PIXEL_Z);
+    // floor to get a single pixel cell id; no snapping of the marker!
+    return { x: Math.floor(p.x), y: Math.floor(p.y), gridZ: CANVAS_PIXEL_Z };
+}
+
 
 // ------
 // ---- camera animation helpers ----
@@ -512,22 +511,22 @@ function flagFromCountryCode(code?: string) {
 
 // Lightweight reverse geocode via Nominatim (MVP-friendly).
 // NOTE: For production, proxy this on your server to respect usage policy & add caching.
-async function reverseGeocode(lat: number, lng: number) {
+async function reverseGeocode(lat: number, lng: number, signal?: AbortSignal) {
     const url = new URL("https://nominatim.openstreetmap.org/reverse");
     url.searchParams.set("format", "jsonv2");
     url.searchParams.set("lat", String(lat));
     url.searchParams.set("lon", String(lng));
-    url.searchParams.set("zoom", "10");        // city/regional precision
+    url.searchParams.set("zoom", "10");
     url.searchParams.set("addressdetails", "1");
 
     const res = await fetch(url.toString(), {
         headers: { "Accept": "application/json" },
+        signal,
     });
     if (!res.ok) throw new Error(`Geocode HTTP ${res.status}`);
     const data = await res.json();
 
     const addr = data.address || {};
-    // Try a few keys that can contain a "city-like" thing
     const city = addr.city || addr.town || addr.village || addr.hamlet || addr.municipality;
     const region = addr.state || addr.region || addr.county;
     const countryName = addr.country;
@@ -552,6 +551,8 @@ function snapToCanvasGrid(map: any, lng: number, lat: number, zoom: number) {
     const snapped = map.unproject({ x: cx, y: cy }, zoom);
     return { x: gx, y: gy, lng: snapped.lng, lat: snapped.lat, zoom };
 }
+
+
 
 
 
@@ -601,28 +602,32 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     const [selectionTile, setSelectionTile] = useState<TileMeta | null>(null);
     const [selectionOpen, setSelectionOpen] = useState(false);
 
-    // helper for “build meta” (dummy country for now)
-    const toTileMeta = (x: number, y: number, z: number): TileMeta => ({
-        x, y, zoom: z,
-        countryName: undefined,       // MVP: unknown
-        countryFlagEmoji: undefined,  // MVP: unknown
-        painted: false,               // MVP: assume unpainted
-    });
+    // near other refs at top of component
+    const geocodeAbortRef = useRef<AbortController | null>(null);
+    const selectionSeqRef = useRef(0); // increases each click; latest wins
+
 
     // share handler
     const shareTile = async (tile: TileMeta) => {
         try {
             const url = new URL(window.location.href);
             url.pathname = "/map";
-            url.searchParams.set("x", String(tile.x));
-            url.searchParams.set("y", String(tile.y));
             url.searchParams.set("z", String(tile.zoom));
+            if (tile.lat != null && tile.lng != null) {
+                url.searchParams.set("lat", tile.lat.toFixed(6));
+                url.searchParams.set("lng", tile.lng.toFixed(6));
+            }
+            // include the “canvas pixel” id we display
+            url.searchParams.set("px", String(tile.x));
+            url.searchParams.set("py", String(tile.y));
             await navigator.clipboard.writeText(url.toString());
             toast.success("Link copied", { duration: 1800 });
         } catch {
             toast.error("Couldn't copy link");
         }
     };
+
+
 
     // open drawer with coords (Option A)
     const createForTile = (tile: TileMeta) => {
@@ -647,6 +652,12 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
         return () => { map.off("zoomend", onZoomEnd); };
     }, []);
 
+    useEffect(() => {
+        return () => {
+            geocodeAbortRef.current?.abort();
+        };
+    }, []);
+
 
     // Mount map
     useEffect(() => {
@@ -667,7 +678,21 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
             map.on("load", () => {
                 installDeclutterHooks(map);
                 map.getCanvas().style.cursor = "grab";
+                map.doubleClickZoom?.disable();
                 const maplibregl = (lib as any).default ?? lib;
+
+                // Deep link: ?lat=&lng=&zoom=
+                try {
+                    const url = new URL(window.location.href);
+                    const qLat = parseFloat(url.searchParams.get("lat") || "");
+                    const qLng = parseFloat(url.searchParams.get("lng") || "");
+                    const qZoom = parseFloat(url.searchParams.get("zoom") || "");
+
+                    if (Number.isFinite(qLat) && Number.isFinite(qLng)) {
+                        const targetZoom = Number.isFinite(qZoom) ? qZoom : Math.max(MIN_INTERACT_ZOOM, 10.5);
+                        map.jumpTo({ center: [qLng, qLat], zoom: targetZoom });
+                    }
+                } catch { }
 
                 // ----- low-zoom visibility gate for gp_* overlays -----
                 const syncOverlayVisibilityForZoom = () => {
@@ -681,12 +706,15 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                         }
                     }
                 };
+
+
                 map.on("zoomend", syncOverlayVisibilityForZoom);
 
                 // ----- pointer handlers for click vs drag -----
                 map.on("mousedown", (e: any) => {
                     lastDownRef.current = { x: e.point.x, y: e.point.y };
                 });
+
 
                 map.on("click", async (e: any) => {
                     const now = Date.now();
@@ -703,20 +731,16 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                         return;
                     }
 
-                    // RAW click location (what we use for everything now)
+                    // 1) EXACT click (no snapping)
                     const clickLng = e.lngLat.lng;
                     const clickLat = e.lngLat.lat;
 
-                    // Place or move the checkpoint pin at the exact click
+                    // 2) Place or move the pin exactly where the user clicked
                     if (!markerRef.current) {
                         const el = makeMarkerElPin("#3B82F6");
                         markerElRef.current = el;
                         const gl = (await import("maplibre-gl")).default;
-                        markerRef.current = new gl.Marker({
-                            element: el,
-                            anchor: "bottom",
-                            offset: [0, -7],
-                        })
+                        markerRef.current = new gl.Marker({ element: el, anchor: "bottom", offset: [0, -7] })
                             .setLngLat([clickLng, clickLat])
                             .addTo(map);
                     } else {
@@ -729,32 +753,54 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                         }
                     }
 
-                    // If you want a quick blip, keep this (optional)
-                    // const gl = (await import("maplibre-gl")).default;
-                    // const blipEl = makeClickDotEl();
-                    // const blip = new gl.Marker({ element: blipEl, anchor: "center" })
-                    //   .setLngLat([clickLng, clickLat]).addTo(map);
-                    // setTimeout(() => blip.remove(), 450);
-
-                    // Save checkpoint (point-based now)
+                    // 3) Save checkpoint (kept for your state/debug)
                     setCheckpoint({
-                        x: NaN, y: NaN,                  // not used anymore — or remove from type
-                        lng: clickLng, lat: clickLat,    // ⬅️ exact click
+                        x: NaN, y: NaN,                // (unused now)
+                        lng: clickLng, lat: clickLat,
                         zoom: z, placedAt: now,
                     });
                     lastPlacementAtRef.current = now;
-
-                    // Sound + open modal with POINT meta (no more TileMeta)
                     playPop(isMuted);
 
-                    // If SelectionModal currently expects tiles, change its props
-                    // e.g., let it accept { lat, lng } instead:
-                    setSelectionTile({ x: NaN, y: NaN, zoom: z } as any); // or refactor SelectionModal to a PointSelectionModal
+                    // 4) Compute *display-only* canvas pixel (no effect on pin)
+                    const px = latLngToCanvasPixel(map, clickLng, clickLat); // {x,y,gridZ}
+
+                    // 5) Build initial modal meta; enrich with reverse geocode
+                    let meta: TileMeta = {
+                        x: px.x,
+                        y: px.y,
+                        zoom: Math.floor(z),   // UI zoom (not the gridZ)
+                        lat: clickLat,
+                        lng: clickLng,
+                        painted: false,
+                    };
+                    setSelectionTile(meta);
                     setSelectionOpen(true);
 
-                    // Also dispatch a point-based event for create flows
+                    // before doing any async work, bump the selection sequence
+                    const seq = ++selectionSeqRef.current;
+
+                    // cancel any in-flight geocode
+                    geocodeAbortRef.current?.abort();
+                    geocodeAbortRef.current = new AbortController();
+
+                    // ... you already built initial meta and setSelectionTile(meta); setSelectionOpen(true);
+
+                    try {
+                        const loc = await reverseGeocode(clickLat, clickLng, geocodeAbortRef.current.signal);
+                        // Only apply if this is still the newest selection (no newer clicks happened)
+                        if (seq === selectionSeqRef.current) {
+                            setSelectionTile(prev => prev ? { ...prev, ...loc } : prev);
+                        }
+                    } catch (err: any) {
+                        // Ignore aborts; log other errors
+                        if (err?.name !== "AbortError") console.warn("reverseGeocode failed", err);
+                    }
+
+
+                    // Optional: trigger “create” flow (point-based)
                     window.dispatchEvent(new CustomEvent("genplace:create:point", {
-                        detail: { lat: clickLat, lng: clickLng, zoom: z }
+                        detail: { lat: clickLat, lng: clickLng, zoom: z, pixelX: px.x, pixelY: px.y, gridZ: px.gridZ }
                     }));
                 });
 
