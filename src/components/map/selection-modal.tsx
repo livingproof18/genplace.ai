@@ -1,4 +1,3 @@
-// src/components/map/selection-modal.tsx
 "use client";
 
 import * as React from "react";
@@ -6,11 +5,23 @@ import { X, MapPin, Wand2, Share2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type TileMeta = {
+    // Grid indices (snapped)
     x: number;
     y: number;
     zoom: number;
+
+    // Geography (reverse geocoded)
+    city?: string;
+    region?: string;
     countryName?: string;
+    countryCode?: string;            // e.g., "GB"
     countryFlagEmoji?: string;
+
+    // Exact coordinate (we’ll store the snapped center you computed)
+    lat?: number;
+    lng?: number;
+
+    // Painting meta
     painted: boolean;
     paintedBy?: { username: string; userId: string };
 };
@@ -44,23 +55,30 @@ export function SelectionModal({
 
     if (!open || !tile) return null;
 
-    const locationLabel = tile.countryName
-        ? `${tile.countryName} ${tile.countryFlagEmoji ?? ""}`
-        : "Unknown location";
+    // Location label
+    const parts = [
+        tile.city,
+        tile.region,
+        tile.countryName ? `${tile.countryName} ${tile.countryFlagEmoji ?? ""}` : undefined,
+    ].filter(Boolean);
+    const locationLabel = parts.length > 0 ? parts.join(", ") : "Unknown location";
+
+    // Lat/lng display (snapped center)
+    const coordLabel =
+        tile.lat != null && tile.lng != null
+            ? `${tile.lat.toFixed(5)}, ${tile.lng.toFixed(5)}`
+            : "—";
 
     return (
         <div
             role="dialog"
             aria-label="Selected tile details"
             className={cn(
-                // Positioning: bottom-center, safe-area aware
                 "fixed left-1/2 -translate-x-1/2 z-[1100]",
                 "w-[min(92vw,680px)]",
                 "bottom-[max(1rem,env(safe-area-inset-bottom))]",
-                // Solid light card (+ shadow) regardless of page dark mode
                 "rounded-2xl bg-white text-black shadow-[0_12px_40px_rgba(0,0,0,.35)]",
                 "border border-black/10",
-                // Padding & entry motion
                 "px-5 py-4 md:px-6 md:py-5",
                 "motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-2",
                 className
@@ -74,7 +92,7 @@ export function SelectionModal({
                     </div>
 
                     <div className="min-w-0">
-                        {/* Top line: larger, clearer */}
+                        {/* Top line */}
                         <div className="flex flex-wrap items-center gap-2 text-[15px] md:text-base font-medium leading-tight">
                             <span className="opacity-70">Pixel:</span>
                             <span className="font-mono tabular-nums">{tile.x},{tile.y}</span>
@@ -82,8 +100,12 @@ export function SelectionModal({
                             <span className="truncate">{locationLabel}</span>
                         </div>
 
-                        {/* Sub line: painted / not painted */}
+                        {/* Sub line: coordinates + zoom + painted info */}
                         <div className="mt-1.5 text-sm text-black/70">
+                            <span className="font-mono">{coordLabel}</span>
+                            <span className="opacity-40 mx-1.5">•</span>
+                            <span>z{tile.zoom}</span>
+                            <span className="opacity-40 mx-1.5">•</span>
                             {tile.painted && tile.paintedBy ? (
                                 <>
                                     Painted by{" "}
@@ -110,7 +132,6 @@ export function SelectionModal({
 
             {/* Actions */}
             <div className="mt-4 flex flex-wrap items-center gap-2.5">
-                {/* Create (primary) — auto width, rounded-pill */}
                 <button
                     aria-label={`Create new image for tile ${tile.x},${tile.y}`}
                     title={canCreate ? "Create an image for this tile" : disabledReason}
@@ -129,7 +150,6 @@ export function SelectionModal({
                     <span className="text-[15px] font-semibold">Create</span>
                 </button>
 
-                {/* Share (neutral pill) */}
                 <button
                     aria-label={`Share link to tile ${tile.x},${tile.y}`}
                     onClick={() => onShare(tile)}

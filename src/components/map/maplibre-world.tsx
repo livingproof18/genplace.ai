@@ -21,6 +21,16 @@ const TILES_VISIBLE_ZOOM = 16.5;       // hide gp_* overlays below this
 const CLICK_DEBOUNCE_MS = 250;
 const MOVE_TOL_PX = 5;                 // dragging vs click
 
+// A placement anchored at an exact lat/lng (no grid)
+type PointPlacement = {
+    id: string;          // stable ID for this artwork (e.g., server id or hash)
+    url: string;         // image URL
+    lat: number;
+    lng: number;
+    pixelSize?: number;  // optional: desired pixel size for the icon (default 256)
+    anchor?: "center" | "bottom" | "top" | "left" | "right" | "bottom-left" | "bottom-right" | "top-left" | "top-right";
+};
+
 
 // ---------------- Slippy helpers ----------------
 function lon2tile(lon: number, z: number) {
@@ -203,55 +213,162 @@ function installDeclutterHooks(map: any) {
 type Checkpoint = { x: number; y: number; lat: number; lng: number; zoom: number; placedAt: number };
 const MUTE_KEY = "genplace:map:mute";
 
-function makeMarkerEl() {
-    // Root given to maplibregl.Marker – DO NOT apply transform on this element.
+
+// --- one-time CSS for a tiny pulse animation (injected once) ---
+let __pinCssInjected = false;
+function ensurePinCss() {
+    if (__pinCssInjected) return;
+    __pinCssInjected = true;
+    const css = `
+  @keyframes gp-pulse {
+    0%   { transform: scale(1);   opacity: .35; }
+    70%  { transform: scale(1.35); opacity: 0;  }
+    100% { transform: scale(1.35); opacity: 0;  }
+  }
+  .gp-pin-wrap { position: relative; width: 27px; height: 41px; }
+  .gp-pin-svg  { display:block; filter: drop-shadow(0 8px 18px rgba(59,130,246,.28)); }
+  .gp-pin-dot  { position: absolute; left: 50%; bottom: 3px; width: 8px; height: 8px;
+                 transform: translateX(-50%); border-radius: 9999px; background: rgb(59,130,246);
+                 box-shadow: 0 6px 12px rgba(59,130,246,.35); }
+  .gp-pin-pulse{ position: absolute; left: 50%; bottom: 3px; width: 8px; height: 8px;
+                 transform: translateX(-50%); border-radius: 9999px; background: rgb(59,130,246);
+                 opacity: .35; }
+  @media (prefers-reduced-motion: no-preference) {
+    .gp-pin-pulse { animation: gp-pulse 1200ms ease-out infinite; }
+  }`;
+    const el = document.createElement("style");
+    el.textContent = css;
+    document.head.appendChild(el);
+}
+
+/**
+ * makeMarkerElPin:
+ * A crisp “map pin” like wplace — blue fill, inner white dot, soft shadow, pulse halo.
+ * You can pass a custom brand color if you want (defaults to Tailwind blue-500).
+ */
+function makeMarkerElPin(color = "#3B82F6") {
+    ensurePinCss();
+
+    // Root handed to MapLibre. Keep transform-neutral on this element.
     const root = document.createElement("div");
     root.setAttribute("role", "img");
     root.setAttribute("aria-label", "Checkpoint");
-    root.style.width = "0px";   // width/height come from inner, root stays transform-neutral
-    root.style.height = "0px";
 
-    // Visual inner bubble (we animate this one)
-    const inner = document.createElement("div");
-    inner.style.position = "relative";
-    inner.style.width = "26px";
-    inner.style.height = "26px";
-    inner.style.borderRadius = "9999px";
-    inner.style.background =
-        "radial-gradient(circle at 50% 45%, rgba(255,255,255,0.25) 0 30%, hsl(217 91% 60%) 30% 100%)";
-    inner.style.boxShadow =
-        "0 8px 24px hsla(217, 91%, 60%, .25), 0 0 0 1px rgba(255,255,255,.15) inset";
-    inner.style.transformOrigin = "50% 100%"; // scale from bottom-center
-    inner.style.willChange = "transform, opacity";
-    inner.style.opacity = "0";
-    inner.style.transform = "scale(0.92)";
+    // Container we animate (scale/opacity), anchored bottom-center via Marker options.
+    const wrap = document.createElement("div");
+    wrap.className = "gp-pin-wrap gp-pin-anim";
+    wrap.style.transformOrigin = "50% 100%";
+    wrap.style.opacity = "0";
+    wrap.style.transform = "scale(0.92)";
 
-    // little stem
-    const stem = document.createElement("div");
-    stem.style.position = "absolute";
-    stem.style.left = "50%";
-    stem.style.bottom = "-6px";
-    stem.style.transform = "translateX(-50%)";
-    stem.style.width = "6px";
-    stem.style.height = "6px";
-    stem.style.borderRadius = "9999px";
-    stem.style.background = "hsl(217 91% 60%)";
-    stem.style.boxShadow = "0 6px 12px hsla(217, 91%, 60%, .35)";
+    // SVG pin (27x41) — fill color = brand blue, subtle outer rim via opacity
+    wrap.innerHTML = `
+    <svg class="gp-pin-svg" width="27" height="41" viewBox="0 0 27 41" aria-hidden="true">
+      <g fill-rule="nonzero">
+        <!-- pin body -->
+        <g fill="${color}">
+          <path d="M27,13.5 C27,19.074644 20.250001,27.000002 14.75,34.500002 C14.016665,35.500004 12.983335,35.500004 12.25,34.500002 C6.7499993,27.000002 0,19.222562 0,13.5 C0,6.0441559 6.0441559,0 13.5,0 C20.955844,0 27,6.0441559 27,13.5 Z"></path>
+        </g>
+        <!-- outer rim -->
+        <g opacity="0.22" fill="#000000">
+          <path d="M13.5,0 C6.0441559,0 0,6.0441559 0,13.5 C0,19.222562 6.7499993,27 12.25,34.5 C13,35.522727 14.016664,35.500004 14.75,34.5 C20.250001,27 27,19.074644 27,13.5 C27,6.0441559 20.955844,0 13.5,0 Z M13.5,1 C20.415404,1 26,6.584596 26,13.5 C26,15.898657 24.495584,19.181431 22.220703,22.738281 C19.945823,26.295132 16.705119,30.142167 13.943359,33.908203 C13.743445,34.180814 13.612715,34.322738 13.5,34.441406 C13.387285,34.322738 13.256555,34.180814 13.056641,33.908203 C10.284481,30.127985 7.4148684,26.314159 5.015625,22.773438 C2.6163816,19.232715 1,15.953538 1,13.5 C1,6.584596 6.584596,1 13.5,1 Z"></path>
+        </g>
+        <!-- inner white dot -->
+        <g transform="translate(8,8)">
+          <circle fill="#000000" opacity="0.2" cx="5.5" cy="5.5" r="5.5"></circle>
+          <circle fill="#FFFFFF" cx="5.5" cy="5.5" r="5.5"></circle>
+        </g>
+      </g>
+    </svg>
+  `;
 
-    inner.appendChild(stem);
-    root.appendChild(inner);
+    // Small dot that touches the ground + a gentle pulse
+    const dot = document.createElement("div");
+    dot.className = "gp-pin-dot";
+    const pulse = document.createElement("div");
+    pulse.className = "gp-pin-pulse";
 
-    // pop-in on the INNER only (respect reduced motion)
+    wrap.appendChild(dot);
+    wrap.appendChild(pulse);
+    root.appendChild(wrap);
+
+    // Pop-in (respect reduced motion)
     const prefersReduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     requestAnimationFrame(() => {
-        inner.style.opacity = "1";
-        inner.style.transform = prefersReduced ? "none" : "scale(1)";
+        wrap.style.transition = "transform 180ms ease, opacity 140ms ease";
+        wrap.style.opacity = "1";
+        wrap.style.transform = prefersReduced ? "none" : "scale(1)";
     });
 
-    // stash a reference to the inner for later re-pop animations
-    (root as any).__inner = inner;
+    // Stash a reference for re-pop on move
+    (root as any).__inner = wrap;
     return root as HTMLDivElement;
 }
+
+function makeClickDotEl() {
+    const el = document.createElement("div");
+    el.style.width = "10px";
+    el.style.height = "10px";
+    el.style.borderRadius = "9999px";
+    el.style.background = "white";
+    el.style.boxShadow = "0 0 0 2px rgba(59,130,246,.9), 0 6px 16px rgba(0,0,0,.28)";
+    el.style.transform = "translate(-50%, -50%)";
+    el.style.opacity = "1";
+    el.style.transition = "transform 300ms ease, opacity 300ms ease";
+    requestAnimationFrame(() => {
+        el.style.transform = "translate(-50%, -50%) scale(1.35)";
+        el.style.opacity = "0";
+    });
+    return el;
+}
+
+const CLICK_TILE_SRC = "gp__click_tile_src";
+const CLICK_TILE_LAYER = "gp__click_tile_layer";
+
+function geojsonForTile(x: number, y: number, zInt: number) {
+    const b = tileBounds(x, y, zInt); // you already have tileBounds()
+    return {
+        type: "FeatureCollection",
+        features: [
+            {
+                type: "Feature",
+                geometry: {
+                    type: "Polygon", coordinates: [[
+                        [b[0][0], b[0][1]],
+                        [b[1][0], b[1][1]],
+                        [b[2][0], b[2][1]],
+                        [b[3][0], b[3][1]],
+                        [b[0][0], b[0][1]],
+                    ]]
+                },
+                properties: {},
+            },
+        ],
+    } as any;
+}
+
+function flashTileOutline(map: any, x: number, y: number, zInt: number) {
+    const data = geojsonForTile(x, y, zInt);
+    if (!map.getSource(CLICK_TILE_SRC)) {
+        map.addSource(CLICK_TILE_SRC, { type: "geojson", data });
+        map.addLayer({
+            id: CLICK_TILE_LAYER,
+            type: "line",
+            source: CLICK_TILE_SRC,
+            paint: { "line-color": "#3B82F6", "line-width": 2, "line-opacity": 0.9 },
+        });
+    } else {
+        (map.getSource(CLICK_TILE_SRC) as any).setData(data);
+        map.setPaintProperty(CLICK_TILE_LAYER, "line-opacity", 0.9);
+    }
+    // fade out + clear after 1s
+    setTimeout(() => {
+        try {
+            map.setPaintProperty(CLICK_TILE_LAYER, "line-opacity", 0.0);
+        } catch { }
+    }, 1000);
+}
+
 
 // Simple synth “pop” (no asset needed)
 let audioCtx: AudioContext | null = null;
@@ -276,22 +393,173 @@ function playPop(isMuted: boolean) {
     } catch { }
 }
 
-// Snap map click to nearest TILE_SIZE grid at the current zoom (uses project/unproject)
-function snapToTile(map: any, lng: number, lat: number, zoom: number) {
-    const p = map.project([lng, lat], zoom); // world px at this zoom
-    const tx = Math.round(p.x / TILE_SIZE);
-    const ty = Math.round(p.y / TILE_SIZE);
-    const cx = (tx + 0.5) * TILE_SIZE;
-    const cy = (ty + 0.5) * TILE_SIZE;
-    const snapped = map.unproject({ x: cx, y: cy }, zoom);
-    return { x: tx, y: ty, lat: snapped.lat, lng: snapped.lng };
+// Replace your snapToTile with this slippy-tile version (zInt = integer zoom)
+function snapToTile(lng: number, lat: number, z: number) {
+    // use the integer zoom level grid (tiles are defined per integer z)
+    const zInt = Math.floor(z + 1e-6);
+    const n = Math.pow(2, zInt);
+
+    // tile indices of the tile that CONTAINS the click
+    const xt = Math.floor(((lng + 180) / 360) * n);
+
+    const latRad = (lat * Math.PI) / 180;
+    const yt = Math.floor(
+        (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n
+    );
+
+    // center of that tile
+    const centerLng = (xt + 0.5) / n * 360 - 180;
+    const nY = Math.PI - (2 * Math.PI * (yt + 0.5)) / n;
+    const centerLat = (180 / Math.PI) * Math.atan(0.5 * (Math.exp(nY) - Math.exp(-nY)));
+
+    return { x: xt, y: yt, lng: centerLng, lat: centerLat, zoom: zInt };
 }
+
+// Source/layer ids for point placements
+const P_SRC = "gp_point_src";
+const P_LAYER = "gp_point_layer";
+
+// Image cache: keep track of which icon names we’ve added
+const addedImages = new Set<string>();
+
+// Create (or update) one GeoJSON source that holds all point placements
+function ensurePointSource(map: any) {
+    if (!map.getSource(P_SRC)) {
+        map.addSource(P_SRC, {
+            type: "geojson",
+            data: { type: "FeatureCollection", features: [] },
+        });
+    }
+}
+
+// Create one symbol layer that renders icons from the point source
+function ensurePointLayer(map: any) {
+    if (!map.getLayer(P_LAYER)) {
+        map.addLayer({
+            id: P_LAYER,
+            type: "symbol",
+            source: P_SRC,
+            layout: {
+                "icon-image": ["get", "icon"],          // per-feature icon name
+                "icon-allow-overlap": true,
+                "icon-ignore-placement": true,
+                "icon-anchor": ["get", "anchor"],       // per-feature anchor
+                "icon-size": ["get", "iconSize"],       // per-feature size scalar
+            },
+        });
+    }
+}
+
+// Load an external image into the style sprite under a unique name
+async function addIconToStyle(map: any, name: string, url: string) {
+    if (addedImages.has(name)) return;
+    const img = await (await fetch(url, { cache: "force-cache" })).blob();
+    const bmp = await createImageBitmap(img);
+    if (!map.hasImage(name)) {
+        map.addImage(name, bmp, { pixelRatio: 1 });
+    }
+    addedImages.add(name);
+}
+
+async function syncPointPlacements(
+    map: any,
+    placements: PointPlacement[],
+    defaultPixelSize: number
+) {
+    ensurePointSource(map);
+    ensurePointLayer(map);
+
+    // 1) Make sure all icon images are available in the style
+    // Use a unique sprite name per placement (e.g., its id)
+    for (const p of placements) {
+        const iconName = `gp_icon_${p.id}`;
+        await addIconToStyle(map, iconName, p.url);
+    }
+
+    // 2) Build the feature collection
+    const features = placements.map((p) => {
+        const iconName = `gp_icon_${p.id}`;
+        const px = p.pixelSize ?? defaultPixelSize;
+
+        // Mapbox GL's symbol "icon-size" is a scalar relative to the source image's pixel size at 1x.
+        // If you want the image to render at its native pixel size, use 1. To scale, change this.
+        const sizeScalar = 1;
+
+        return {
+            type: "Feature",
+            geometry: { type: "Point", coordinates: [p.lng, p.lat] },
+            properties: {
+                icon: iconName,
+                anchor: p.anchor ?? "bottom",
+                iconSize: sizeScalar,
+                // you can keep any additional metadata here as needed
+            },
+        };
+    });
+
+    const src = map.getSource(P_SRC) as any;
+    src.setData({ type: "FeatureCollection", features });
+}
+
+// Build a flag emoji from ISO country code (e.g., "GB" → 🇬🇧)
+function flagFromCountryCode(code?: string) {
+    if (!code) return undefined;
+    const cc = code.trim().toUpperCase();
+    if (cc.length !== 2) return undefined;
+    const A = 0x1f1e6;
+    return String.fromCodePoint(A + (cc.charCodeAt(0) - 65), A + (cc.charCodeAt(1) - 65));
+}
+
+// Lightweight reverse geocode via Nominatim (MVP-friendly).
+// NOTE: For production, proxy this on your server to respect usage policy & add caching.
+async function reverseGeocode(lat: number, lng: number) {
+    const url = new URL("https://nominatim.openstreetmap.org/reverse");
+    url.searchParams.set("format", "jsonv2");
+    url.searchParams.set("lat", String(lat));
+    url.searchParams.set("lon", String(lng));
+    url.searchParams.set("zoom", "10");        // city/regional precision
+    url.searchParams.set("addressdetails", "1");
+
+    const res = await fetch(url.toString(), {
+        headers: { "Accept": "application/json" },
+    });
+    if (!res.ok) throw new Error(`Geocode HTTP ${res.status}`);
+    const data = await res.json();
+
+    const addr = data.address || {};
+    // Try a few keys that can contain a "city-like" thing
+    const city = addr.city || addr.town || addr.village || addr.hamlet || addr.municipality;
+    const region = addr.state || addr.region || addr.county;
+    const countryName = addr.country;
+    const countryCode = (addr.country_code || "").toUpperCase() || undefined;
+
+    return {
+        city: city as string | undefined,
+        region: region as string | undefined,
+        countryName: countryName as string | undefined,
+        countryCode,
+        countryFlagEmoji: flagFromCountryCode(countryCode),
+    };
+}
+
+// Snap click to your canvas grid (world-pixel grid at current zoom)
+function snapToCanvasGrid(map: any, lng: number, lat: number, zoom: number) {
+    const pt = map.project([lng, lat], zoom);      // world px at this zoom
+    const gx = Math.round(pt.x / TILE_SIZE);
+    const gy = Math.round(pt.y / TILE_SIZE);
+    const cx = (gx + 0.5) * TILE_SIZE;
+    const cy = (gy + 0.5) * TILE_SIZE;
+    const snapped = map.unproject({ x: cx, y: cy }, zoom);
+    return { x: gx, y: gy, lng: snapped.lng, lat: snapped.lat, zoom };
+}
+
+
 
 // === Component ===
 type Props = {
-    placements: GridPlacement[];
-    onClickEmpty: (xy: { x: number; y: number }) => void;
-    onClickPlacement: (p: GridPlacement) => void;
+    placements: PointPlacement[];
+    onClickEmpty: (xy: { lng: number; lat: number }) => void; // ⬅️ changed
+    onClickPlacement: (p: PointPlacement) => void;
     sizePx: 128 | 256 | 512;
     onCreate?: () => void;            // ⬅️ new: open prompt drawer
     hasTokens?: boolean;              // ⬅️ new: control disabled state
@@ -424,55 +692,36 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                     const now = Date.now();
                     if (now - lastPlacementAtRef.current < CLICK_DEBOUNCE_MS) return;
 
-                    // treat it as a click only if not dragged
+                    // click vs drag
                     const d0 = lastDownRef.current;
                     const moved = d0 ? Math.hypot(e.point.x - d0.x, e.point.y - d0.y) : 0;
                     if (moved > MOVE_TOL_PX) return;
 
                     const z = map.getZoom();
                     if (z < MIN_INTERACT_ZOOM) {
-                        toast.info("You need to zoom in to select a tile.", {
-                            duration: 2200,
-                            icon: <Info className="h-4 w-4" />,
-                            // closeButton is already globally on, but you can add per-toast too:
-                            // closeButton: true,
-                            // description: "Zoom closer until tiles are visible.",
-                        });
+                        toast.info("You need to zoom in to place.", { duration: 2200, icon: <Info className="h-4 w-4" /> });
                         return;
                     }
 
-                    // snap to tile @ current zoom
-                    const { lng, lat } = e.lngLat;
-                    const snapped = snapToTile(map, lng, lat, z);
+                    // RAW click location (what we use for everything now)
+                    const clickLng = e.lngLat.lng;
+                    const clickLat = e.lngLat.lat;
 
-                    const cp: Checkpoint = {
-                        x: snapped.x, y: snapped.y, lng: snapped.lng, lat: snapped.lat, zoom: z, placedAt: now,
-                    };
-                    setCheckpoint(cp);
-                    lastPlacementAtRef.current = now;
-
-                    // add/update marker
-                    const lib = (window as any).maplibregl || (await import("maplibre-gl")).default;
-                    // creation
+                    // Place or move the checkpoint pin at the exact click
                     if (!markerRef.current) {
-                        const el = makeMarkerEl();
+                        const el = makeMarkerElPin("#3B82F6");
                         markerElRef.current = el;
-
-                        // Use the SAME maplibregl instance used to create the map:
-                        const gl = (mapRef.current as any)._gl || (await import("maplibre-gl")).default;
+                        const gl = (await import("maplibre-gl")).default;
                         markerRef.current = new gl.Marker({
                             element: el,
-                            anchor: "center",
-                            offset: [0, 6], // lift visual a little so stem touches the coordinate
+                            anchor: "bottom",
+                            offset: [0, -7],
                         })
-                            .setLngLat([cp.lng, cp.lat])
+                            .setLngLat([clickLng, clickLat])
                             .addTo(map);
                     } else {
-                        markerRef.current.setLngLat([cp.lng, cp.lat]);
-
-                        // smooth re-pop on INNER, not the root
-                        const el = markerElRef.current as any;
-                        const inner: HTMLDivElement | undefined = el?.__inner;
+                        markerRef.current.setLngLat([clickLng, clickLat]);
+                        const inner = (markerElRef.current as any)?.__inner as HTMLDivElement | undefined;
                         if (inner) {
                             inner.style.transition = "transform 180ms ease";
                             inner.style.transform = "scale(0.92)";
@@ -480,15 +729,35 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                         }
                     }
 
+                    // If you want a quick blip, keep this (optional)
+                    // const gl = (await import("maplibre-gl")).default;
+                    // const blipEl = makeClickDotEl();
+                    // const blip = new gl.Marker({ element: blipEl, anchor: "center" })
+                    //   .setLngLat([clickLng, clickLat]).addTo(map);
+                    // setTimeout(() => blip.remove(), 450);
 
-                    // feedback
+                    // Save checkpoint (point-based now)
+                    setCheckpoint({
+                        x: NaN, y: NaN,                  // not used anymore — or remove from type
+                        lng: clickLng, lat: clickLat,    // ⬅️ exact click
+                        zoom: z, placedAt: now,
+                    });
+                    lastPlacementAtRef.current = now;
+
+                    // Sound + open modal with POINT meta (no more TileMeta)
                     playPop(isMuted);
-                    // toast.success("Checkpoint set.", { duration: 1800 });
 
-                    // NEW: open selection modal with meta
-                    setSelectionTile(toTileMeta(cp.x, cp.y, z));
+                    // If SelectionModal currently expects tiles, change its props
+                    // e.g., let it accept { lat, lng } instead:
+                    setSelectionTile({ x: NaN, y: NaN, zoom: z } as any); // or refactor SelectionModal to a PointSelectionModal
                     setSelectionOpen(true);
+
+                    // Also dispatch a point-based event for create flows
+                    window.dispatchEvent(new CustomEvent("genplace:create:point", {
+                        detail: { lat: clickLat, lng: clickLng, zoom: z }
+                    }));
                 });
+
 
                 // Resize
                 const onResize = () => map.resize();
@@ -556,11 +825,15 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
             setTimeout(() => {
                 flySmooth(map, [lng, lat], Math.max(z, MIN_INTERACT_ZOOM + 0.2), { speed: 0.65, curve: 1.35 });
                 // place marker after flight begins
-                setTimeout(() => {
-                    const el = markerElRef.current ?? makeMarkerEl();
+                setTimeout(async () => {
+                    const el = markerElRef.current ?? makeMarkerElPin();
                     if (!markerRef.current) {
-                        const lib = (window as any).maplibregl;
-                        markerRef.current = new lib.Marker({ element: el, anchor: "bottom" })
+                        const gl = (await import("maplibre-gl")).default;
+                        markerRef.current = new gl.Marker({
+                            element: el,
+                            anchor: "bottom",
+                            offset: [0, -7], // <— same lift here
+                        })
                             .setLngLat([lng, lat])
                             .addTo(map);
                         markerElRef.current = el;
@@ -591,115 +864,18 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     // Sync placements → add/update/remove only what's necessary
     useEffect(() => {
         const map = mapRef.current;
-        if (!map || !map.getStyle?.() || !map.isStyleLoaded?.()) return;
+        if (!map || !map.isStyleLoaded?.()) return;
 
-        // Early no-op if nothing changed (prevents churn)
-        const sig = placementsSig(placements);
-        if (sig === lastSigRef.current && currentIdsRef.current.size > 0) {
-            // Still ensure opacity matches the toggle without scanning layers:
-            for (const id of currentIdsRef.current) {
-                const layerId = `${id}_layer`;
-                if (map.getLayer(layerId)) {
-                    map.setPaintProperty(layerId, "raster-opacity", overlaysVisible ? 1 : 0);
-                }
+        // Render all point placements as icons
+        (async () => {
+            try {
+                await syncPointPlacements(map, placements, sizePx /* default pixel size */);
+            } catch (e) {
+                console.error("syncPointPlacements error", e);
             }
-            return;
-        }
-        lastSigRef.current = sig;
+        })();
+    }, [placements, sizePx]);
 
-        // 1) Build hit-test index
-        indexRef.current.clear();
-        placements.forEach((p) => indexRef.current.set(`${p.x}:${p.y}:${p.z}`, p));
-
-        // 2) Desired ids + fingerprints at fixed z
-        const wantIds = new Set<string>();
-        const wantMeta = new Map<string, string>();
-        for (const p of placements) {
-            if (p.z !== TILE_ZOOM) continue;
-            const id = artId(p.x, p.y, p.z);
-            wantIds.add(id);
-            wantMeta.set(id, fpPlacement(p));
-        }
-
-        // 3) Reconcile with current style sources (gp_* only)
-        const style = map.getStyle();
-        const existingSources = style?.sources ? Object.keys(style.sources) : [];
-        const existingGpIds = new Set(existingSources.filter((k) => k.startsWith("gp_")));
-
-        // Drop any local ids that aren't in the style anymore
-        for (const id of Array.from(currentIdsRef.current)) {
-            if (!existingGpIds.has(id)) {
-                currentIdsRef.current.delete(id);
-                currentMetaRef.current.delete(id);
-            }
-        }
-
-        // 4) REMOVE stale ids from the style
-        for (const id of existingGpIds) {
-            if (!wantIds.has(id)) {
-                const layerId = `${id}_layer`;
-                if (map.getLayer(layerId)) map.removeLayer(layerId);
-                if (map.getSource(id)) map.removeSource(id);
-                currentIdsRef.current.delete(id);
-                currentMetaRef.current.delete(id);
-            }
-        }
-
-        // Helper: put new art layers above all basemap layers (top of stack)
-        const addLayerOnTop = (layerSpec: any) => {
-            const layers = map.getStyle()?.layers ?? [];
-            // Insert at the end (top). If you want to insert just above labels, you could find a label id here.
-            const beforeId = undefined;
-            map.addLayer(layerSpec, beforeId);
-        };
-
-        // 5) ADD or UPDATE desired ids
-        for (const p of placements) {
-            if (p.z !== TILE_ZOOM) continue;
-
-            const id = artId(p.x, p.y, p.z);
-            const meta = fpPlacement(p);
-            const layerId = `${id}_layer`;
-            const bounds = tileBounds(p.x, p.y, p.z);
-
-            if (!map.getSource(id)) {
-                map.addSource(id, { type: "image", url: p.url, coordinates: bounds });
-                addLayerOnTop({
-                    id: layerId,
-                    type: "raster",
-                    source: id,
-                    paint: { "raster-opacity": overlaysVisible ? 1 : 0 },
-                });
-                currentIdsRef.current.add(id);
-                currentMetaRef.current.set(id, meta);
-            } else {
-                const prev = currentMetaRef.current.get(id);
-                if (prev !== meta) {
-                    const src = map.getSource(id) as any;
-                    if (src?.updateImage) {
-                        src.updateImage({ url: p.url, coordinates: bounds });
-                    } else {
-                        // Fallback if the source lost updateImage (e.g., style shenanigans):
-                        if (map.getLayer(layerId)) map.removeLayer(layerId);
-                        map.removeSource(id);
-                        map.addSource(id, { type: "image", url: p.url, coordinates: bounds });
-                        addLayerOnTop({
-                            id: layerId,
-                            type: "raster",
-                            source: id,
-                            paint: { "raster-opacity": overlaysVisible ? 1 : 0 },
-                        });
-                    }
-                    currentMetaRef.current.set(id, meta);
-                }
-                // keep opacity in sync without scanning
-                if (map.getLayer(layerId)) {
-                    map.setPaintProperty(layerId, "raster-opacity", overlaysVisible ? 1 : 0);
-                }
-                currentIdsRef.current.add(id);
-            }
-        }
-    }, [placements, overlaysVisible]);
 
 
 
@@ -707,14 +883,11 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     useEffect(() => {
         const map = mapRef.current;
         if (!map || !map.isStyleLoaded?.()) return;
-
-        for (const id of currentIdsRef.current) {
-            const layerId = `${id}_layer`;
-            if (map.getLayer(layerId)) {
-                map.setPaintProperty(layerId, "raster-opacity", overlaysVisible ? 1 : 0);
-            }
+        if (map.getLayer(P_LAYER)) {
+            map.setLayoutProperty(P_LAYER, "visibility", overlaysVisible ? "visible" : "none");
         }
     }, [overlaysVisible]);
+
 
 
     // Handlers for controls
