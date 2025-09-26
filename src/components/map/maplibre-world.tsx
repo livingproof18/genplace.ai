@@ -530,59 +530,88 @@ async function syncPointPlacements(
     src.setData({ type: "FeatureCollection", features });
 }
 
-// Build a flag emoji from ISO country code (e.g., "GB" → 🇬🇧)
+// Build a flag emoji from ISO country code (e.g., "GB" → 🇬🇧).
+// If the runtime cannot render an emoji (very rare), this returns undefined.
 function flagFromCountryCode(code?: string) {
     if (!code) return undefined;
     const cc = code.trim().toUpperCase();
     if (cc.length !== 2) return undefined;
     const A = 0x1f1e6;
-    return String.fromCodePoint(A + (cc.charCodeAt(0) - 65), A + (cc.charCodeAt(1) - 65));
+    try {
+        return String.fromCodePoint(A + (cc.charCodeAt(0) - 65), A + (cc.charCodeAt(1) - 65));
+    } catch {
+        return undefined;
+    }
 }
 
 // Lightweight reverse geocode via Nominatim (MVP-friendly).
 // NOTE: For production, proxy this on your server to respect usage policy & add caching.
 async function reverseGeocode(lat: number, lng: number, signal?: AbortSignal) {
+    // Build request to Nominatim. We use "jsonv2" which gives structured address details.
     const url = new URL("https://nominatim.openstreetmap.org/reverse");
     url.searchParams.set("format", "jsonv2");
     url.searchParams.set("lat", String(lat));
     url.searchParams.set("lon", String(lng));
+    // zoom 10 is a reasonable regional granularity; response contains address fields
     url.searchParams.set("zoom", "10");
     url.searchParams.set("addressdetails", "1");
 
+    // NOTE: Browsers won't let you set a custom User-Agent. The referer header
+    // will typically be sent automatically. For production, proxy this request
+    // on your server and set a clear User-Agent/contact there.
     const res = await fetch(url.toString(), {
         headers: { "Accept": "application/json" },
         signal,
     });
-    if (!res.ok) throw new Error(`Geocode HTTP ${res.status}`);
+    if (!res.ok) {
+        // don't throw raw network code into UI; return graceful fallback
+        throw new Error(`Geocode HTTP ${res.status}`);
+    }
     const data = await res.json();
 
-    const addr = data.address || {};
-    const city = addr.city || addr.town || addr.village || addr.hamlet || addr.municipality;
-    const region = addr.state || addr.region || addr.county;
+    // Nominatim returns 'address' with many fields. Take the most specific city-like field.
+    const addr = data?.address || {};
+
+    // Pick a concise shortName/displayName for UI:
+    // Prefer city > town > village > municipality > hamlet > county > state > country
+    const city =
+        addr.city ||
+        addr.town ||
+        addr.village ||
+        addr.municipality ||
+        addr.hamlet ||
+        addr.suburb; // sometimes suburb holds the neighborhood/city name
+
+    const county = addr.county;
+    const state = addr.state || addr.region;
     const countryName = addr.country;
     const countryCode = (addr.country_code || "").toUpperCase() || undefined;
 
+    // Build a short display name that is just the most relevant label (city or county or state)
+    const displayName =
+        (city && city.trim()) ||
+        (county && county.trim()) ||
+        (state && state.trim()) ||
+        (countryName && countryName.trim()) ||
+        "";
+
+    // Emoji may not render in some environments; return a fallback to the 2-letter code
+    const flagEmoji = countryCode ? flagFromCountryCode(countryCode) : undefined;
+    const countryFlagEmoji = flagEmoji ?? undefined;
+
     return {
-        city: city as string | undefined,
-        region: region as string | undefined,
-        countryName: countryName as string | undefined,
+        // structured pieces (if you want them)
+        city: city || undefined,
+        region: state || undefined,
+        county: county || undefined,
+        countryName: countryName || undefined,
         countryCode,
-        countryFlagEmoji: flagFromCountryCode(countryCode),
+        // short display string for UI (e.g., "London")
+        displayName,
+        // the emoji (if available)
+        countryFlagEmoji,
     };
 }
-
-// Snap click to your canvas grid (world-pixel grid at current zoom)
-function snapToCanvasGrid(map: any, lng: number, lat: number, zoom: number) {
-    const pt = map.project([lng, lat], zoom);      // world px at this zoom
-    const gx = Math.round(pt.x / TILE_SIZE);
-    const gy = Math.round(pt.y / TILE_SIZE);
-    const cx = (gx + 0.5) * TILE_SIZE;
-    const cy = (gy + 0.5) * TILE_SIZE;
-    const snapped = map.unproject({ x: cx, y: cy }, zoom);
-    return { x: gx, y: gy, lng: snapped.lng, lat: snapped.lat, zoom };
-}
-
-
 
 
 
