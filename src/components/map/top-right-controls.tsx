@@ -43,7 +43,7 @@ export function TopRightControls({
 
             {/* Theme toggle — compact glass */}
             <div className="pointer-events-auto control-glass">
-                {/* <ThemeToggle /> */}
+                <ThemeToggle />
             </div>
 
             {/* Locate me — compact glass icon */}

@@ -9,6 +9,7 @@ import { BottomCenterAction } from "./bottom-center-action";
 import { toast } from "sonner";
 import { SelectionModal, type TileMeta } from "./selection-modal";
 import { Info } from "lucide-react";
+import { createPortal } from "react-dom"; // <- ADD
 
 // ---- CONFIG ----
 const TILE_ZOOM = 5;
@@ -17,9 +18,13 @@ const STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 // === Checkpoint spec constants (MapLibre/GL) ===
 const TILE_SIZE = 256;                 // your canvas/generation tile size
 const MIN_INTERACT_ZOOM = 11.0;        // block tagging below this
-const TILES_VISIBLE_ZOOM = 10.7;       // hide gp_* overlays below this
+const TILES_VISIBLE_ZOOM = 11.0;       // hide gp_* overlays below this
 const CLICK_DEBOUNCE_MS = 250;
 const MOVE_TOL_PX = 5;                 // dragging vs click
+
+// Geolocation cache key + TTL (ms). Keep cached loc for e.g. 24h (86400000 ms)
+const GEO_CACHE_KEY = "genplace:geo_cache_v1";
+const GEO_CACHE_TTL = 14 * 24 * 60 * 60 * 1000; // 2 weeks
 
 // A placement anchored at an exact lat/lng (no grid)
 type PointPlacement = {
@@ -368,6 +373,30 @@ function flashTileOutline(map: any, x: number, y: number, zInt: number) {
     }, 1000);
 }
 
+// Helper: read/write geolocation cache
+function readGeoCache(): { lat: number; lng: number; ts: number } | null {
+    try {
+        const raw = localStorage.getItem(GEO_CACHE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed.ts !== "number") return null;
+        if (Date.now() - parsed.ts > GEO_CACHE_TTL) {
+            localStorage.removeItem(GEO_CACHE_KEY);
+            return null;
+        }
+        if (typeof parsed.lat === "number" && typeof parsed.lng === "number") return parsed;
+        return null;
+    } catch {
+        return null;
+    }
+}
+function writeGeoCache(lat: number, lng: number) {
+    try {
+        localStorage.setItem(GEO_CACHE_KEY, JSON.stringify({ lat, lng, ts: Date.now() }));
+    } catch { }
+}
+
+
 
 // Simple synth “pop” (no asset needed)
 let audioCtx: AudioContext | null = null;
@@ -448,6 +477,7 @@ function ensurePointLayer(map: any) {
         });
     }
 }
+
 
 // Load an external image into the style sprite under a unique name
 async function addIconToStyle(map: any, name: string, url: string) {
@@ -581,6 +611,15 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
 
     const [overlaysVisible, setOverlaysVisible] = useState(true);
 
+    // --- hint: show when user is too zoomed out ---
+    const [showZoomHint, setShowZoomHint] = useState(false);
+
+
+    // Geolocation cache key + TTL (ms). Keep cached loc for e.g. 24h (86400000 ms)
+    const GEO_CACHE_KEY = "genplace:geo_cache_v1";
+    const GEO_CACHE_TTL = 24 * 60 * 60 * 1000; // 24h
+
+
     // Track what we currently have on the map to avoid churn
     // track gp_* layers to toggle quickly
     const currentIdsRef = useRef<Set<string>>(new Set());
@@ -654,9 +693,28 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
 
     useEffect(() => {
         return () => {
-            geocodeAbortRef.current?.abort();
+            try {
+                geocodeAbortRef.current?.abort();
+            } catch (err) {
+                // Defensive: abort shouldn't throw but guard anyway
+                console.warn("geocode abort threw:", err);
+            } finally {
+                geocodeAbortRef.current = null;
+            }
         };
     }, []);
+
+
+    // Keep hint in sync with zoom level
+    // useEffect(() => {
+    //     const map = mapRef.current;
+    //     if (!map) return;
+    //     const syncHint = () => setShowZoomHint(map.getZoom() < MIN_INTERACT_ZOOM);
+    //     // run once + on zoom
+    //     syncHint();
+    //     map.on("zoom", syncHint);
+    //     return () => map.off("zoom", syncHint);
+    // }, []);
 
 
     // Mount map
@@ -706,6 +764,26 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                         }
                     }
                 };
+
+                // Sync overlay visibility on zoom
+                // --- top-center hint sync (run after map exists) ---
+                const syncHint = () => {
+                    try {
+                        setShowZoomHint(map.getZoom() < MIN_INTERACT_ZOOM);
+                    } catch {
+                        // ignore if getZoom fails for some reason
+                    }
+                };
+                // run once now that map exists
+                syncHint();
+                // update on zoom (and hide on moveend if you prefer)
+                map.on("zoom", syncHint);
+
+                // ensure we remove the listener when the map is removed
+                map.once("remove", () => {
+                    try { map.off("zoom", syncHint); } catch { }
+                });
+
 
 
                 map.on("zoomend", syncOverlayVisibilityForZoom);
@@ -934,6 +1012,47 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
         }
     }, [overlaysVisible]);
 
+    // Render top-center hint into document.body so it cannot be occluded by map stacking contexts
+    function ZoomHintPortal() {
+        if (typeof window === "undefined") return null;
+        const content = (
+            <div
+                aria-live="polite"
+                style={{ position: "fixed", left: "50%", top: 16, transform: "translateX(-50%)", zIndex: 99999 }}
+                className={`
+        transition-opacity duration-200
+        ${showZoomHint ? "opacity-100" : "opacity-0 pointer-events-none"}
+      `}
+            >
+                <button
+                    onClick={() => {
+                        // zoomToInteract below exists in the outer scope
+                        zoomToInteract();
+                    }}
+                    className="flex items-center gap-2 rounded-full px-4 h-9 bg-white/95 backdrop-blur border border-black/10 text-black shadow-md hover:bg-white active:bg-white/95 transition-colors"
+                    aria-label="Zoom in to see pixels"
+                >
+                    <Info className="h-4 w-4 text-blue-600" />
+                    <span className="text-[13px] font-medium">Zoom in to see the pixels</span>
+                </button>
+            </div>
+        );
+        return createPortal(content, document.body);
+    }
+
+
+    const zoomToInteract = () => {
+        const map = mapRef.current;
+        if (!map) return;
+        const target = Math.max(MIN_INTERACT_ZOOM, 11);
+        // quick ease so user sees immediate motion
+        map.easeTo({ zoom: target, duration: 320, easing: easeInOutCubic });
+        // hide hint right away for best UX (map zoom event will also update state)
+        setShowZoomHint(false);
+    };
+
+
+
 
 
     // Handlers for controls
@@ -957,39 +1076,93 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
 
     // NEW: locate me
     // Locate me -> zoom-out → slide → zoom-in
-    // Locate me
+
     const locateMe = () => {
+        const map = mapRef.current;
+        if (!map) {
+            window.alert("Map not ready yet.");
+            return;
+        }
         if (!("geolocation" in navigator)) {
             window.alert("Geolocation is not supported by your browser.");
             return;
         }
+
+        // 1) If we have a cached (recent) location, use it immediately for instant feel
+        const cached = readGeoCache();
+        const instantTargetZoom = Math.max(MIN_INTERACT_ZOOM, 11);
+
+        if (cached) {
+            // immediate feedback: fly to cached coordinates
+            map.flyTo({
+                center: [cached.lng, cached.lat],
+                zoom: instantTargetZoom,
+                speed: 1.25,
+                curve: 1.35,
+                essential: true,
+            });
+            // still try to refresh from actual geolocation in background to update cache
+            navigator.geolocation.getCurrentPosition(
+                (pos) => {
+                    writeGeoCache(pos.coords.latitude, pos.coords.longitude);
+                    // if position differs significantly from cache, fly to true position
+                    const lat = pos.coords.latitude, lng = pos.coords.longitude;
+                    const dist = Math.hypot(lat - cached.lat, lng - cached.lng);
+                    if (dist > 0.001) { // small threshold to avoid tiny hops
+                        map.flyTo({ center: [lng, lat], zoom: instantTargetZoom, speed: 1.0, curve: 1.35, essential: true });
+                    }
+                },
+                () => { /* ignore background geolocation errors */ },
+                { enableHighAccuracy: false, maximumAge: 30_000, timeout: 4_000 }
+            );
+            return;
+        }
+
+        // 2) If no cache, give instant zoom feedback, then request geolocation
+        if ((map.getZoom?.() ?? 0) < instantTargetZoom) {
+            map.easeTo({ zoom: instantTargetZoom, duration: 300, easing: easeInOutCubic });
+        }
+
         navigator.geolocation.getCurrentPosition(
             (pos) => {
                 const { latitude, longitude } = pos.coords;
-                // A local “land” zoom level feels right around 11
-                flySmooth(mapRef.current, [longitude, latitude], 11, {
-                    speed: 0.7,      // slower & smoother
-                    curve: 1.35,     // gentle curve
-                    // maxDuration: 2500, // optionally cap long flights
+                writeGeoCache(latitude, longitude);
+                map.flyTo({
+                    center: [longitude, latitude],
+                    zoom: Math.max(map.getZoom() ?? instantTargetZoom, instantTargetZoom),
+                    speed: 1.0,
+                    curve: 1.35,
+                    essential: true,
                 });
             },
             (err) => {
                 console.warn("Geolocation error:", err);
-                window.alert("Unable to get your location. Please allow location access in your browser.");
+                // keep UX graceful: inform user but don't spam
+                window.alert("Couldn't get your live position. Using cached or staying put.");
             },
-            { enableHighAccuracy: false, maximumAge: 10_000, timeout: 7_000 }
+            { enableHighAccuracy: false, maximumAge: 30_000, timeout: 4_000 }
         );
     };
 
+
     // Random explorer
     const flyRandom = () => {
-        const lat = (Math.random() * 160) - 80;   // -80..+80
-        const lng = (Math.random() * 360) - 180;  // -180..+180
-        // Regional zoom feels explorative around ~4.5
-        flySmooth(mapRef.current, [lng, lat], 4.5, {
-            speed: 0.65,   // slightly slower for long hops
-            curve: 1.35,
-            // maxDuration: 3000,
+        const lat = (Math.random() * 160) - 80;
+        const lng = (Math.random() * 360) - 180;
+        const targetZoom = Math.max(MIN_INTERACT_ZOOM, 11);
+
+        // Trigger a short immediate ease for instant motion feedback, then start the smooth flight.
+        const map = mapRef.current;
+        if (map) {
+            // small quick nudge so user sees movement right away
+            map.easeTo({ zoom: Math.min(targetZoom, (map.getZoom?.() ?? targetZoom) + 0.6), duration: 220, easing: easeInOutCubic });
+        }
+
+        // then perform the main flight; make speed higher so flight starts snappier
+        flySmooth(mapRef.current, [lng, lat], targetZoom, {
+            speed: 1.5,   // larger => faster overall travel time (MapLibre uses higher=quicker)
+            curve: 1.25,
+            // consider maxDuration if you want to cap very long hops
         });
     };
 
@@ -997,6 +1170,8 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     return (
         <div ref={containerRef} className="h-dvh w-dvw" style={{ position: "relative" }}>
             {/* Floating control bar (top-left) */}
+
+
             <TopLeftControls
                 onHelp={showHelp}
                 onZoomIn={zoomIn}
@@ -1012,6 +1187,33 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                 onRandom={flyRandom}
             />
             {/* Or: <TopRightControls loginHref="/auth" /> */}
+
+
+            {/* Top-center zoom hint */}
+            {/* Portal for top-center zoom hint so it sits above map (avoids stacking-context issues) */}
+            {typeof window !== "undefined" && <ZoomHintPortal />}
+
+            {/* <div
+                aria-live="polite"
+                className={[
+                    "pointer-events-auto fixed left-1/2 top-4 z-[1200] -translate-x-1/2",
+                    "transition-opacity duration-200",
+                    showZoomHint ? "opacity-100" : "opacity-0 pointer-events-none"
+                ].join(" ")}
+            >
+                <button
+                    onClick={zoomToInteract}
+                    className={[
+                        "flex items-center gap-2 rounded-full px-4 h-9",
+                        "bg-white/95 backdrop-blur border border-black/10 text-black shadow-md",
+                        "hover:bg-white active:bg-white/95 transition-colors"
+                    ].join(" ")}
+                >
+                    <Info className="h-4 w-4 text-blue-600" />
+                    <span className="text-[13px] font-medium">Zoom in to see the pixels</span>
+                </button>
+            </div> */}
+
 
             {/* Bottom-center Create button */}
             {/* Bottom-center Create button — hidden when modal is open */}
