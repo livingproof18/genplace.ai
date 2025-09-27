@@ -2,7 +2,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { GridPlacement } from "./types";
 import { TopLeftControls } from "./top-left-controls";
 import { TopRightControls } from "./top-right-controls"; // ⬅️ add this import
 import { BottomCenterAction } from "./bottom-center-action";
@@ -624,6 +623,7 @@ type Props = {
     onCreate?: () => void;            // ⬅️ new: open prompt drawer
     hasTokens?: boolean;              // ⬅️ new: control disabled state
     cooldownLabel?: string;           // ⬅️ new: e.g. "Out of tokens — regenerates in 2:14"
+    label?: string;                   // ⬅️ new: e.g. "Create 1/5"
 };
 
 export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
@@ -631,12 +631,12 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     onCreate,
     hasTokens = true,
     cooldownLabel = "You're out of tokens — regenerates soon",
+    label = "Create",
 
 }: Props) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<any>(null);
     const center = useMemo<[number, number]>(() => [0, 20], []);
-    const indexRef = useRef<Map<string, GridPlacement>>(new Map());
 
     const [overlaysVisible, setOverlaysVisible] = useState(true);
 
@@ -676,7 +676,82 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
 
 
     // share handler
-    const shareTile = async (tile: TileMeta) => {
+    // share handler -> returns share url + optional snapshot blob
+    // Helper: wait for map to be idle (or timeout)
+    function waitForMapIdle(map: any, timeout = 1200): Promise<void> {
+        return new Promise((resolve) => {
+            if (!map) return resolve();
+            let done = false;
+            const onIdle = () => {
+                if (done) return;
+                done = true;
+                try { map.off("idle", onIdle); } catch { }
+                resolve();
+            };
+            try {
+                map.once("idle", onIdle);
+            } catch {
+                // if once fails, just resolve after timeout
+            }
+            // safety timeout
+            setTimeout(() => {
+                if (done) return;
+                done = true;
+                try { map.off("idle", onIdle); } catch { }
+                resolve();
+            }, timeout);
+        });
+    }
+
+    // Helper: attempt to capture the map canvas as a PNG Blob
+    async function captureMapSnapshot(map: any): Promise<Blob | null> {
+        if (!map) return null;
+        try {
+            // Wait until the map is idle (tiles finished). Timeout short so UX doesn't hang.
+            await waitForMapIdle(map, 1400);
+
+            const canvas: HTMLCanvasElement = map.getCanvas();
+            if (!canvas) return null;
+
+            // Try toBlob (preferred)
+            const blob = await new Promise<Blob | null>((resolve) => {
+                try {
+                    // Some older browsers require toBlob callback; wrap defensively
+                    canvas.toBlob((b) => {
+                        resolve(b);
+                    }, "image/png");
+                } catch (err) {
+                    console.warn("canvas.toBlob threw", err);
+                    resolve(null);
+                }
+            });
+
+            if (blob && blob.size && blob.size > 64) {
+                // Looks legit (non-empty); return it
+                return blob;
+            }
+
+            // If blob is null or tiny, try the dataURL fallback
+            try {
+                const dataUrl = canvas.toDataURL("image/png");
+                // convert dataURL -> blob via fetch (works in modern browsers)
+                const res = await fetch(dataUrl);
+                const fallbackBlob = await res.blob();
+                if (fallbackBlob && fallbackBlob.size > 64) return fallbackBlob;
+            } catch (err) {
+                console.warn("toDataURL -> blob fallback failed:", err);
+            }
+
+            // Give up with null result
+            return null;
+        } catch (err) {
+            console.warn("captureMapSnapshot error:", err);
+            return null;
+        }
+    }
+
+    // share handler -> returns share url + optional snapshot blob
+    const shareTile = async (tile: TileMeta): Promise<{ shareUrl: string; imageBlob?: Blob | null }> => {
         try {
             const url = new URL(window.location.href);
             url.pathname = "/map";
@@ -685,15 +760,25 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                 url.searchParams.set("lat", tile.lat.toFixed(6));
                 url.searchParams.set("lng", tile.lng.toFixed(6));
             }
-            // include the “canvas pixel” id we display
             url.searchParams.set("px", String(tile.x));
             url.searchParams.set("py", String(tile.y));
-            await navigator.clipboard.writeText(url.toString());
-            toast.success("Link copied", { duration: 1800 });
-        } catch {
-            toast.error("Couldn't copy link");
+
+            // Try to capture a PNG snapshot of the current map view
+            let blob: Blob | null = null;
+            try {
+                blob = await captureMapSnapshot(mapRef.current);
+            } catch (err) {
+                console.warn("Could not take map snapshot", err);
+                blob = null;
+            }
+
+            return { shareUrl: url.toString(), imageBlob: blob };
+        } catch (err) {
+            console.error("shareTile build failed", err);
+            throw err;
         }
     };
+
 
 
 
@@ -759,6 +844,9 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                 center, zoom: 3, attributionControl: true,
                 pitch: 0, maxPitch: 0, bearing: 0,
                 dragRotate: false, pitchWithRotate: false, touchPitch: false,
+                // IMPORTANT: keep pixels readable for toBlob / toDataURL
+                preserveDrawingBuffer: true,
+                antialias: true,
             });
             mapRef.current = map;
 
@@ -1211,7 +1299,10 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
             />
 
             {/* Top-right controls (column) */}
-            <TopRightControls onLogin={onLogin}
+            <TopRightControls
+                user={{ name: "Alice Johnson" }}
+
+                onLogin={onLogin}
                 onLocateMe={locateMe}
                 onRandom={flyRandom}
             />
@@ -1248,7 +1339,7 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
             {/* Bottom-center Create button — hidden when modal is open */}
             {!selectionOpen && (
                 <BottomCenterAction
-                    label="Create"
+                    label={label ?? "Create"}
                     icon="wand"
                     onClick={onCreate ?? (() => window.dispatchEvent(new CustomEvent("genplace:create")))}
                     disabled={!hasTokens}

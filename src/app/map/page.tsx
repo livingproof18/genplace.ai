@@ -1,9 +1,12 @@
+// app/(whatever)/map/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import type { GridPlacement } from "@/components/map/types";
-import { PromptDrawer } from "@/components/map/prompt-drawer"; // when ready
+import type { PointPlacement } from "@/components/map/types";
+import { useTokens } from "@/hooks/use-tokens";
+import { PromptDrawer } from "@/components/map/prompt-drawer";
+import { mmss } from "@/lib/time";
 
 const MapLibreWorld = dynamic(
     () => import("@/components/map/maplibre-world").then((m) => m.MapLibreWorld),
@@ -11,55 +14,79 @@ const MapLibreWorld = dynamic(
 );
 
 export default function MapPage() {
-    const [selectedEmpty, setSelectedEmpty] = useState<{ x: number; y: number } | null>(null);
-    const [details, setDetails] = useState<GridPlacement | null>(null);
-    const [size, setSize] = useState<128 | 256 | 512>(256);
-    const [placements, setPlacements] = useState<GridPlacement[]>([]);
-    const [hasTokens, setHasTokens] = useState(true); // TODO: wire to cooldown logic
+    const { tokens, setTokens, consume } = useTokens();
 
-    // Example: open the drawer without preselected tile (free-placement flow)
+    const [drawerOpen, setDrawerOpen] = useState(false);
+    const [presetPoint, setPresetPoint] = useState<{ lat: number; lng: number } | null>(null);
+
+    const [placements, setPlacements] = useState<PointPlacement[]>([]);
+    const [size, setSize] = useState<128 | 256 | 512>(256);
+
+    // open drawer (idea-first)
     const openCreate = () => {
-        // If your drawer requires coords, you could use map center → slippy tile here later.
-        setSelectedEmpty(null);
-        // show drawer UI
-        // setDrawerOpen(true);
+        setPresetPoint(null);
+        setDrawerOpen(true);
     };
 
-    // Optional: listen to the custom event if you don't pass onCreate
+    // listen to global events you already dispatch
     useEffect(() => {
-        const h = () => openCreate();
-        window.addEventListener("genplace:create", h as any);
-        return () => window.removeEventListener("genplace:create", h as any);
+        const open = () => openCreate();
+        const openWithPoint = (e: any) => {
+            const d = e?.detail;
+            if (!d) return;
+            setPresetPoint({ lat: d.lat, lng: d.lng });
+            setDrawerOpen(true);
+        };
+        window.addEventListener("genplace:create", open as any);
+        window.addEventListener("genplace:create:point", openWithPoint as any);
+        return () => {
+            window.removeEventListener("genplace:create", open as any);
+            window.removeEventListener("genplace:create:point", openWithPoint as any);
+        };
     }, []);
 
-    const handlePlace = (p: GridPlacement) => {
-        setPlacements((prev) => [...prev.filter((q) => !(q.x === p.x && q.y === p.y && q.z === p.z)), p]);
-        setSelectedEmpty(null);
+    const handlePlaced = (p: PointPlacement) => {
+        setPlacements((prev) => {
+            const key = (q: PointPlacement) => q.id ?? `${q.url}:${q.lat.toFixed(6)}:${q.lng.toFixed(6)}`;
+            const existing = prev.filter((q) => key(q) !== key(p));
+            return [...existing, p];
+        });
     };
+
+    // Bottom button label / disabled logic (truthy tokens)
+    const cooldownMs = Math.max(0, tokens.nextRegenAt - Date.now());
+    const createLabel = useMemo(() => {
+        const base = `Create ${tokens.current}/${tokens.max}`;
+        return tokens.current < tokens.max ? `${base} (${mmss(cooldownMs)})` : base;
+    }, [tokens, cooldownMs]);
 
     return (
         <div className="h-dvh w-screen overflow-hidden">
             <MapLibreWorld
                 sizePx={size}
                 placements={placements}
-                onClickEmpty={(xy) => setSelectedEmpty(xy)}
-                onClickPlacement={(p) => setDetails(p)}
-                onCreate={openCreate}           // ⬅️ wire Create → Drawer
-                hasTokens={hasTokens}           // ⬅️ control disabled state
-                cooldownLabel="Out of tokens — regenerates in 2:14"
+                onClickEmpty={() => { }}
+                onClickPlacement={() => { }}
+                onCreate={openCreate}
+                hasTokens={tokens.current > 0}
+                cooldownLabel={`Out of tokens — regenerates in ${mmss(cooldownMs)}`}
+                label={createLabel}
             />
 
-            {/* Bring this back when ready */}
+            {/* Bottom button is already rendered by MapLibreWorld using hasTokens/cooldownLabel,
+          but if you prefer to control the label explicitly, pass it there and show the exact text.
+          For now we keep your existing behavior and rely on tooltip/disabled state. */}
+
             <PromptDrawer
-                tile={selectedEmpty}
-                size={size}
-                onClose={() => setSelectedEmpty(null)}
-                onPlaced={handlePlace}
+                open={drawerOpen}
+                onOpenChange={setDrawerOpen}
+                presetPoint={presetPoint}
+                tokens={tokens}
+                onTokens={setTokens}
+                onPlaced={handlePlaced}
+                requireAuth={false}
+                onRequireAuth={() => (window.location.href = "/login")}
             />
         </div>
     );
 }
-
-
-
-//   <TileDetailsModal placement={details} onClose={() => setDetails(null)} /> */}
