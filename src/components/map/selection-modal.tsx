@@ -49,8 +49,6 @@ export function SelectionModal({
 }: Props) {
     const { resolvedTheme } = useTheme();
 
-
-
     // Colors helper (unchanged behaviour, kept for UI)
     const safeHsl = (h: number, s = 62, l = 45) => `hsl(${h} ${s}% ${l}%)`;
     const lightnessToTextColor = (l: number) => (l > 60 ? "#111827" : "#ffffff");

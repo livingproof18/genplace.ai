@@ -1,7 +1,7 @@
 // src/components/map/maplibre-world.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { TopLeftControls } from "./top-left-controls";
 import { TopRightControls } from "./top-right-controls"; // ⬅️ add this import
 import { BottomCenterAction } from "./bottom-center-action";
@@ -704,7 +704,7 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
         });
     }
 
-    // inside your MapLibreWorld component (replace previous snapshot helpers)
+
 
     // Create a tiny white PNG blob as a guaranteed fallback
     async function createBlankImageBlob(w = 2, h = 2, color = "#ffffff"): Promise<Blob> {
@@ -881,6 +881,30 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
         };
     }, []);
 
+
+    // add this near other handlers
+    const clearSelection = useCallback(() => {
+        // close the modal
+        setSelectionOpen(false);
+        setSelectionTile(null);
+
+        // remove the marker + checkpoint
+        setCheckpoint(undefined);
+        if (markerRef.current) {
+            markerRef.current.remove();
+            markerRef.current = null;
+            markerElRef.current = null;
+        }
+    }, []);
+
+    // wire ESC to the single clear function
+    useEffect(() => {
+        const onKey = (ev: KeyboardEvent) => {
+            if (ev.key === "Escape") clearSelection();
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, [clearSelection]);
 
     // Keep hint in sync with zoom level
     // useEffect(() => {
@@ -1415,7 +1439,7 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
             {/* NEW: Bottom-center Selection Modal */}
             <SelectionModal
                 open={!!selectionOpen && !!selectionTile}
-                onClose={() => setSelectionOpen(false)}
+                onClose={clearSelection}    // ⬅️ important
                 tile={selectionTile}
                 onPrimary={createForTile}
                 onShare={shareTile}
