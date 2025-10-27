@@ -77,7 +77,7 @@ export default function MapPage() {
           but if you prefer to control the label explicitly, pass it there and show the exact text.
           For now we keep your existing behavior and rely on tooltip/disabled state. */}
 
-            <PromptDrawer
+            {/* <PromptDrawer
                 open={drawerOpen}
                 onOpenChange={setDrawerOpen}
                 presetPoint={presetPoint}
@@ -86,7 +86,7 @@ export default function MapPage() {
                 onPlaced={handlePlaced}
                 requireAuth={false}
                 onRequireAuth={() => (window.location.href = "/login")}
-            />
+            /> */}
         </div>
     );
 }

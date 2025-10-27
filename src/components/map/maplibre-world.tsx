@@ -626,6 +626,7 @@ type Props = {
     label?: string;                   // ⬅️ new: e.g. "Create 1/5"
 };
 
+
 export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     sizePx,
     onCreate,
@@ -703,83 +704,145 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
         });
     }
 
-    // Helper: attempt to capture the map canvas as a PNG Blob
-    async function captureMapSnapshot(map: any): Promise<Blob | null> {
+    // inside your MapLibreWorld component (replace previous snapshot helpers)
+
+    // Create a tiny white PNG blob as a guaranteed fallback
+    async function createBlankImageBlob(w = 2, h = 2, color = "#ffffff"): Promise<Blob> {
+        const c = document.createElement("canvas");
+        c.width = w;
+        c.height = h;
+        const ctx = c.getContext("2d");
+        if (!ctx) {
+            // Last resort empty blob
+            return new Blob([], { type: "image/png" });
+        }
+        ctx.fillStyle = color;
+        ctx.fillRect(0, 0, w, h);
+        return await new Promise<Blob>((resolve) => c.toBlob((b) => resolve(b || new Blob([], { type: "image/png" })), "image/png"));
+    }
+
+    /**
+     * captureMapSnapshot:
+     * - draws any <img> descendants of the map container (tiles/raster images),
+     * - then draws the WebGL canvas on top.
+     * - returns a PNG blob (or a small white PNG fallback if encoding fails).
+     */
+    async function captureMapSnapshot(map: any, opts?: { opaqueBg?: string }): Promise<Blob | null> {
         if (!map) return null;
+
+        // brief settle
+        await new Promise(requestAnimationFrame);
+        await new Promise(requestAnimationFrame);
+
+        const glCanvas: HTMLCanvasElement = map.getCanvas?.();
+        if (!glCanvas || !glCanvas.width || !glCanvas.height) return null;
+
+        // map container element & bounding box (CSS px)
+        const container: HTMLElement = map.getContainer?.() ?? glCanvas.parentElement ?? glCanvas;
+        const containerRect = container.getBoundingClientRect();
+
+        const w = glCanvas.width; // device pixels
+        const h = glCanvas.height;
+
+        // CSS -> device pixel scale
+        const scale = w / Math.max(1, containerRect.width);
+
+        const off = document.createElement("canvas");
+        off.width = w;
+        off.height = h;
+        const ctx = off.getContext("2d", { alpha: true });
+        if (!ctx) {
+            return await createBlankImageBlob();
+        }
+
+        // optional opaque background
+        if (opts?.opaqueBg) {
+            ctx.save();
+            ctx.fillStyle = opts.opaqueBg;
+            ctx.fillRect(0, 0, w, h);
+            ctx.restore();
+        }
+
+        // Draw DOM images (tiles or other imgs) that live in the map container
         try {
-            // Wait until the map is idle (tiles finished). Timeout short so UX doesn't hang.
-            await waitForMapIdle(map, 1400);
-
-            const canvas: HTMLCanvasElement = map.getCanvas();
-            if (!canvas) return null;
-
-            // Try toBlob (preferred)
-            const blob = await new Promise<Blob | null>((resolve) => {
+            const imgs = Array.from(container.querySelectorAll("img")) as HTMLImageElement[];
+            for (const img of imgs) {
                 try {
-                    // Some older browsers require toBlob callback; wrap defensively
-                    canvas.toBlob((b) => {
-                        resolve(b);
-                    }, "image/png");
-                } catch (err) {
-                    console.warn("canvas.toBlob threw", err);
-                    resolve(null);
+                    if (!img.complete || img.naturalWidth === 0) continue;
+                    const r = img.getBoundingClientRect();
+                    // coordinates relative to container top-left (CSS px)
+                    const xCss = r.left - containerRect.left;
+                    const yCss = r.top - containerRect.top;
+                    const wCss = r.width;
+                    const hCss = r.height;
+                    const x = Math.round(xCss * scale);
+                    const y = Math.round(yCss * scale);
+                    const iw = Math.round(wCss * scale);
+                    const ih = Math.round(hCss * scale);
+
+                    // draw the image to the offscreen canvas
+                    ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, x, y, iw, ih);
+                } catch (e) {
+                    console.warn("[snapshot] drawing map img failed", e, img);
                 }
-            });
-
-            if (blob && blob.size && blob.size > 64) {
-                // Looks legit (non-empty); return it
-                return blob;
             }
+        } catch (e) {
+            console.warn("[snapshot] querySelectorAll('img') failed", e);
+        }
 
-            // If blob is null or tiny, try the dataURL fallback
-            try {
-                const dataUrl = canvas.toDataURL("image/png");
-                // convert dataURL -> blob via fetch (works in modern browsers)
-                const res = await fetch(dataUrl);
-                const fallbackBlob = await res.blob();
-                if (fallbackBlob && fallbackBlob.size > 64) return fallbackBlob;
-            } catch (err) {
-                console.warn("toDataURL -> blob fallback failed:", err);
+        // Draw WebGL canvas content on top (vector layers, overlays rendered to GL)
+        try {
+            ctx.drawImage(glCanvas, 0, 0, w, h);
+        } catch (e) {
+            console.warn("[snapshot] drawImage(glCanvas) failed", e);
+            // continue — we might have drawn some imgs already
+        }
+
+        // Try to encode to PNG
+        try {
+            const blob: Blob | null = await new Promise((resolve) => off.toBlob((b) => resolve(b), "image/png"));
+            if (!blob || blob.size < 32) {
+                // suspiciously small — return a blank white image as guaranteed fallback
+                return await createBlankImageBlob(w > 0 ? Math.min(w, 1024) : 2, h > 0 ? Math.min(h, 1024) : 2, opts?.opaqueBg ?? "#ffffff");
             }
-
-            // Give up with null result
-            return null;
+            return blob;
         } catch (err) {
-            console.warn("captureMapSnapshot error:", err);
-            return null;
+            console.warn("[snapshot] toBlob failed", err);
+            return await createBlankImageBlob();
         }
     }
 
-    // share handler -> returns share url + optional snapshot blob
+    /**
+     * shareTile: builds the share URL and returns an image blob (always returns a blob fallback if snapshot fails)
+     */
     const shareTile = async (tile: TileMeta): Promise<{ shareUrl: string; imageBlob?: Blob | null }> => {
-        try {
-            const url = new URL(window.location.href);
-            url.pathname = "/map";
-            url.searchParams.set("z", String(tile.zoom));
-            if (tile.lat != null && tile.lng != null) {
-                url.searchParams.set("lat", tile.lat.toFixed(6));
-                url.searchParams.set("lng", tile.lng.toFixed(6));
-            }
-            url.searchParams.set("px", String(tile.x));
-            url.searchParams.set("py", String(tile.y));
-
-            // Try to capture a PNG snapshot of the current map view
-            let blob: Blob | null = null;
-            try {
-                blob = await captureMapSnapshot(mapRef.current);
-            } catch (err) {
-                console.warn("Could not take map snapshot", err);
-                blob = null;
-            }
-
-            return { shareUrl: url.toString(), imageBlob: blob };
-        } catch (err) {
-            console.error("shareTile build failed", err);
-            throw err;
+        // Build share URL
+        const url = new URL(window.location.href);
+        url.pathname = "/map";
+        url.searchParams.set("z", String(tile.zoom));
+        if (tile.lat != null && tile.lng != null) {
+            url.searchParams.set("lat", tile.lat.toFixed(6));
+            url.searchParams.set("lng", tile.lng.toFixed(6));
         }
+        // url.searchParams.set("px", String(tile.x));
+        // url.searchParams.set("py", String(tile.y));
+
+        let finalBlob: Blob | null = null;
+        try {
+            // primary: compositing snapshot
+            finalBlob = await captureMapSnapshot(mapRef.current, { opaqueBg: "#ffffff" });
+        } catch (err) {
+            console.warn("[share] captureMapSnapshot failed", err);
+            finalBlob = null;
+        }
+
+        // guaranteed fallback: blank white PNG
+        if (!finalBlob) {
+            finalBlob = await createBlankImageBlob(2, 2, "#ffffff");
+        }
+
+        return { shareUrl: url.toString(), imageBlob: finalBlob };
     };
-
-
 
 
     // open drawer with coords (Option A)
@@ -980,6 +1043,7 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                     geocodeAbortRef.current = new AbortController();
 
                     // ... you already built initial meta and setSelectionTile(meta); setSelectionOpen(true);
+
 
                     try {
                         const loc = await reverseGeocode(clickLat, clickLng, geocodeAbortRef.current.signal);
