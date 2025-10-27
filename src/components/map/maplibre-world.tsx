@@ -230,10 +230,10 @@ function ensurePinCss() {
   }
   .gp-pin-wrap { position: relative; width: 27px; height: 41px; }
   .gp-pin-svg  { display:block; filter: drop-shadow(0 8px 18px rgba(59,130,246,.28)); }
-  .gp-pin-dot  { position: absolute; left: 50%; bottom: 3px; width: 8px; height: 8px;
+  .gp-pin-dot  { position: absolute; left: 50%; bottom: 0; width: 8px; height: 8px;
                  transform: translateX(-50%); border-radius: 9999px; background: rgb(59,130,246);
                  box-shadow: 0 6px 12px rgba(59,130,246,.35); }
-  .gp-pin-pulse{ position: absolute; left: 50%; bottom: 3px; width: 8px; height: 8px;
+  .gp-pin-pulse{ position: absolute; left: 50%; bottom: 0; width: 8px; height: 8px;
                  transform: translateX(-50%); border-radius: 9999px; background: rgb(59,130,246);
                  opacity: .35; }
   @media (prefers-reduced-motion: no-preference) {
@@ -1022,7 +1022,7 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                         const el = makeMarkerElPin("#3B82F6");
                         markerElRef.current = el;
                         const gl = (await import("maplibre-gl")).default;
-                        markerRef.current = new gl.Marker({ element: el, anchor: "bottom", offset: [0, -7] })
+                        markerRef.current = new gl.Marker({ element: el, anchor: "bottom", })
                             .setLngLat([clickLng, clickLat])
                             .addTo(map);
                     } else {
@@ -1343,7 +1343,7 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
             (err) => {
                 console.warn("Geolocation error:", err);
                 // keep UX graceful: inform user but don't spam
-                window.alert("Couldn't get your live position. Using cached or staying put.");
+                window.alert("Couldn't get your live position. Ensure you have granted location access.");
             },
             { enableHighAccuracy: false, maximumAge: 30_000, timeout: 4_000 }
         );
