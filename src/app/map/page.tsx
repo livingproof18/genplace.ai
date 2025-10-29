@@ -1,12 +1,15 @@
-// app/(whatever)/map/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import type { PointPlacement } from "@/components/map/types";
+import type { Model } from "@/components/map/types"; // or wherever you put it
+
 import { useTokens } from "@/hooks/use-tokens";
-import { PromptDrawer } from "@/components/map/prompt-drawer";
 import { mmss } from "@/lib/time";
+
+import { ChatComposer } from "@/components/create/chat-composer";
+import { GenerationPanel, type Variant, type Size } from "@/components/create/generation-panel";
 
 const MapLibreWorld = dynamic(
     () => import("@/components/map/maplibre-world").then((m) => m.MapLibreWorld),
@@ -14,51 +17,143 @@ const MapLibreWorld = dynamic(
 );
 
 export default function MapPage() {
-    const { tokens, setTokens, consume } = useTokens();
+    const { tokens, setTokens } = useTokens();
 
-    const [drawerOpen, setDrawerOpen] = useState(false);
+    // map placements
+    const [placements, setPlacements] = useState<PointPlacement[]>([]);
+
+    // creation state shared between composer & panel
+    const [prompt, setPrompt] = useState("");
+    const [size, setSize] = useState<Size>(256);
+    const [model, setModel] = useState<Model>("genplace");
     const [presetPoint, setPresetPoint] = useState<{ lat: number; lng: number } | null>(null);
 
-    const [placements, setPlacements] = useState<PointPlacement[]>([]);
-    const [size, setSize] = useState<128 | 256 | 512>(256);
+    const [generating, setGenerating] = useState(false);
+    const [variants, setVariants] = useState<Variant[]>([]);
+    const [selectedId, setSelectedId] = useState<string | null>(null);
+    const [panelOpen, setPanelOpen] = useState(false);
+    const lastGenAtRef = useRef(0);
 
-    // open drawer (idea-first)
-    const openCreate = () => {
-        setPresetPoint(null);
-        setDrawerOpen(true);
-    };
+    // === util ===
+    const cooldownMs = Math.max(0, tokens.nextRegenAt - Date.now());
+    const canSubmit = prompt.trim().length > 0 && tokens.current > 0 && !generating;
 
-    // listen to global events you already dispatch
+    // === events from map ===
     useEffect(() => {
-        const open = () => openCreate();
-        const openWithPoint = (e: any) => {
+        const onPoint = (e: any) => {
             const d = e?.detail;
             if (!d) return;
             setPresetPoint({ lat: d.lat, lng: d.lng });
-            setDrawerOpen(true);
+            // For tile-first, focus the composer; generation starts only when they submit.
+            window.dispatchEvent(new CustomEvent("genplace:composer:focus"));
         };
-        window.addEventListener("genplace:create", open as any);
-        window.addEventListener("genplace:create:point", openWithPoint as any);
-        return () => {
-            window.removeEventListener("genplace:create", open as any);
-            window.removeEventListener("genplace:create:point", openWithPoint as any);
-        };
+        window.addEventListener("genplace:create:point", onPoint as any);
+        return () => window.removeEventListener("genplace:create:point", onPoint as any);
     }, []);
 
-    const handlePlaced = (p: PointPlacement) => {
-        setPlacements((prev) => {
-            const key = (q: PointPlacement) => q.id ?? `${q.url}:${q.lat.toFixed(6)}:${q.lng.toFixed(6)}`;
-            const existing = prev.filter((q) => key(q) !== key(p));
-            return [...existing, p];
-        });
+    // === fake services (reuse your previous logic) ===
+    function hash(s: string) {
+        let h = 0;
+        for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+        return h;
+    }
+    const fakeImagesFor = (p: string): Variant[] => {
+        const seed = Math.abs(hash(p));
+        return [
+            { id: `A_${seed}`, url: `https://picsum.photos/seed/${seed}/512/512` },
+            { id: `B_${seed + 1}`, url: `https://picsum.photos/seed/${seed + 1}/512/512` },
+        ];
     };
+    const GEN_RATE_MS = 10_000;
 
-    // Bottom button label / disabled logic (truthy tokens)
-    const cooldownMs = Math.max(0, tokens.nextRegenAt - Date.now());
-    const createLabel = useMemo(() => {
-        const base = `Create ${tokens.current}/${tokens.max}`;
-        return tokens.current < tokens.max ? `${base} (${mmss(cooldownMs)})` : base;
-    }, [tokens, cooldownMs]);
+    async function doGenerate() {
+        const now = Date.now();
+        const since = now - lastGenAtRef.current;
+        if (since < GEN_RATE_MS) {
+            // surface via panel banner
+            throw new Error(`Please wait ${mmss(GEN_RATE_MS - since)} before generating again.`);
+        }
+        lastGenAtRef.current = now;
+
+        // simulate latency
+        await new Promise((r) => setTimeout(r, 900 + Math.random() * 900));
+        return fakeImagesFor(prompt.trim() || "default");
+    }
+
+    async function regenerateOne(slot: 0 | 1) {
+        if (!panelOpen || generating) return;
+        setGenerating(true);
+        try {
+            await new Promise((r) => setTimeout(r, 700 + Math.random() * 600));
+            const alt = `https://picsum.photos/seed/${Math.floor(Math.random() * 10_000)}/512/512`;
+            setVariants((prev) => {
+                const next = [...prev];
+                if (next[slot]) next[slot] = { ...next[slot], id: crypto.randomUUID(), url: alt };
+                return next;
+            });
+        } finally {
+            setGenerating(false);
+        }
+    }
+
+    async function onSubmitFromComposer() {
+        if (!canSubmit) return;
+        // open panel and start generating
+        setPanelOpen(true);
+        setVariants([]);
+        setSelectedId(null);
+        setGenerating(true);
+        try {
+            const imgs = await doGenerate();
+            setVariants(imgs.slice(0, 2));
+        } catch (err) {
+            // Show error banner in panel
+            setVariants([]);
+            setSelectedId(null);
+            // store an ephemeral error as a "pseudo variant" message handled by the panel prop
+            // (we’ll pass the error down via prop)
+        } finally {
+            setGenerating(false);
+        }
+    }
+
+    async function onPlaceSelected() {
+        if (!selectedId || !presetPoint || tokens.current <= 0) return;
+
+        // simulate place
+        await new Promise((r) => setTimeout(r, 600 + Math.random() * 600));
+        const picked = variants.find((v) => v.id === selectedId);
+        if (!picked) return;
+
+        // consume 1 token
+        setTokens((t) => {
+            const left = Math.max(0, t.current - 1);
+            return {
+                current: left,
+                max: t.max,
+                nextRegenAt: left < t.max ? Date.now() + 2 * 60 * 1000 : t.nextRegenAt,
+            };
+        });
+
+        // add to map
+        setPlacements((prev) => [
+            ...prev.filter((q) => q.id !== picked.id),
+            {
+                id: crypto.randomUUID(),
+                url: picked.url,
+                lat: presetPoint.lat,
+                lng: presetPoint.lng,
+                pixelSize: size,
+                anchor: "bottom",
+            },
+        ]);
+
+        // close panel & clear selection (keep prompt for quick re-run)
+        setPanelOpen(false);
+        setSelectedId(null);
+        // keep presetPoint so they can re-roll/replace in same area; clear if you prefer:
+        // setPresetPoint(null);
+    }
 
     return (
         <div className="h-dvh w-screen overflow-hidden">
@@ -67,26 +162,44 @@ export default function MapPage() {
                 placements={placements}
                 onClickEmpty={() => { }}
                 onClickPlacement={() => { }}
-                onCreate={openCreate}
+                // The old “Create” button is removed; composer is now always on screen.
                 hasTokens={tokens.current > 0}
                 cooldownLabel={`Out of tokens — regenerates in ${mmss(cooldownMs)}`}
-                label={createLabel}
+                label={`Create ${tokens.current}/${tokens.max}`}
             />
 
-            {/* Bottom button is already rendered by MapLibreWorld using hasTokens/cooldownLabel,
-          but if you prefer to control the label explicitly, pass it there and show the exact text.
-          For now we keep your existing behavior and rely on tooltip/disabled state. */}
-
-            {/* <PromptDrawer
-                open={drawerOpen}
-                onOpenChange={setDrawerOpen}
-                presetPoint={presetPoint}
+            {/* Bottom-center Chat Composer */}
+            <ChatComposer
                 tokens={tokens}
-                onTokens={setTokens}
-                onPlaced={handlePlaced}
-                requireAuth={false}
-                onRequireAuth={() => (window.location.href = "/login")}
-            /> */}
+                prompt={prompt}
+                onPrompt={setPrompt}
+                model={model}
+                onModel={setModel}
+                size={size}
+                onSize={setSize}
+                onSubmit={onSubmitFromComposer}
+                canSubmit={canSubmit}
+                cooldownLabel={`Next +1 in ${mmss(cooldownMs)}`}
+            />
+
+            {/* Right-docked Generation Panel */}
+            <GenerationPanel
+                open={panelOpen}
+                onOpenChange={setPanelOpen}
+                model={model}
+                size={size}
+                tokens={tokens}
+                variants={variants}
+                generating={generating}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                onRegenerateSlot={regenerateOne}
+                // inform panel whether we have a point yet (idea-first vs tile-first banner)
+                hasPoint={!!presetPoint}
+                onPlace={onPlaceSelected}
+                cooldownMs={cooldownMs}
+            // when tile-first “Create” was clicked, focus already set by event
+            />
         </div>
     );
 }

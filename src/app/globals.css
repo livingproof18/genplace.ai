@@ -44,46 +44,47 @@
 }
 
 /* ==== BRAND TOKENS (spec) ==== */
-/* Default: dark UI */
+
+/* Default: LIGHT UI */
 :root {
-  /* near-black bg & light foreground */
-  --background: 16 16% 6%;
-  --foreground: 210 40% 98%;
+  /* white background, dark text */
+  --background: 0 0% 100%;
+  --foreground: 222 47% 11%;
 
   /* primary = #3B82F6 (blue-500) */
   --primary: 217 91% 60%;
   --primary-foreground: 0 0% 100%;
 
   /* surfaces & neutrals */
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --border: 220 13% 91%;
+  --input: 220 13% 91%;
+  --ring: 217 91% 60%;
+
+  /* popover backgrounds (solid) */
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+}
+
+/* DARK MODE */
+.dark {
+  /* near-black background, light text */
+  --background: 16 16% 6%;
+  --foreground: 210 40% 98%;
+
+  /* primary = same blue */
+  --primary: 217 91% 60%;
+  --primary-foreground: 0 0% 100%;
+
   --card: 0 0% 6%;
   --card-foreground: 0 0% 98%;
   --border: 220 14% 22%;
   --input: 220 14% 22%;
   --ring: 217 91% 60%;
 
-  /* NEW: make popover solid (not glass) */
   --popover: 0 0% 6%;
   --popover-foreground: 0 0% 98%;
-}
-
-/* Light mode overrides (optional — defaults to system if user toggles) */
-.dark {
-  --background: 224 71% 4%;
-  --foreground: 213 31% 91%;
-
-  /* keep primary legible on dark */
-  --primary: 217 91% 60%;
-  --primary-foreground: 0 0% 100%;
-
-  --card: 224 71% 6%;
-  --card-foreground: 213 31% 91%;
-  --border: 220 14% 22%;
-  --input: 220 14% 22%;
-  --ring: 217 91% 60%;
-
-  /* NEW: dark popover solid as well */
-  --popover: 224 71% 6%;
-  --popover-foreground: 213 31% 91%;
 }
 
 @layer base {

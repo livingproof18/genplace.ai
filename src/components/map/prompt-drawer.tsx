@@ -255,10 +255,10 @@ export function PromptDrawer({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/40 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out" />
+        <Dialog.Overlay className="fixed inset-0 pointer-events-none" />
         <Dialog.Content
           className={cn(
-            "fixed right-0 top-0 h-dvh w-full max-w-[480px] bg-background border-l",
+            "fixed right-0 top-0 z-[1300] h-dvh w-full max-w-[480px] bg-background border-l",
             "shadow-2xl focus:outline-none data-[state=open]:animate-in data-[state=closed]:animate-out",
             "p-4 sm:p-5"
           )}

@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { SelectionModal, type TileMeta } from "./selection-modal";
 import { Info } from "lucide-react";
 import { createPortal } from "react-dom"; // <- ADD
+import { cn } from "@/lib/utils";
 
 // ---- CONFIG ----
 const TILE_ZOOM = 5;
@@ -848,12 +849,13 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     // open drawer with coords (Option A)
     const createForTile = (tile: TileMeta) => {
         setSelectionOpen(false);
-        // Use your existing “Create” integration:
-        // Fire a targeted event with coords, MapPage will open PromptDrawer preset.
-        window.dispatchEvent(new CustomEvent("genplace:create:tile", { detail: { x: tile.x, y: tile.y } }));
-        // Also fire the generic event if you want to keep both flows working:
-        if (!onCreate) window.dispatchEvent(new CustomEvent("genplace:create"));
-        onCreate?.();
+        // Tile-first path: open the drawer WITH a preset point (lat/lng).
+        // MapPage already listens for this and sets presetPoint  opens the drawer.
+        if (tile.lat != null && tile.lng != null) {
+            window.dispatchEvent(
+                new CustomEvent("genplace:create:point", { detail: { lat: tile.lat, lng: tile.lng } })
+            );
+        }
     };
 
     useEffect(() => {
@@ -1082,9 +1084,9 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
 
 
                     // Optional: trigger “create” flow (point-based)
-                    window.dispatchEvent(new CustomEvent("genplace:create:point", {
-                        detail: { lat: clickLat, lng: clickLng, zoom: z, pixelX: px.x, pixelY: px.y, gridZ: px.gridZ }
-                    }));
+                    // window.dispatchEvent(new CustomEvent("genplace:create:point", {
+                    //     detail: { lat: clickLat, lng: clickLng, zoom: z, pixelX: px.x, pixelY: px.y, gridZ: px.gridZ }
+                    // }));
                 });
 
 
@@ -1229,17 +1231,22 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
         ${showZoomHint ? "opacity-100" : "opacity-0 pointer-events-none"}
       `}
             >
+
                 <button
                     onClick={() => {
-                        // zoomToInteract below exists in the outer scope
                         zoomToInteract();
                     }}
-                    className="flex items-center gap-2 rounded-full px-4 h-9 bg-white/95 backdrop-blur border border-black/10 text-black shadow-md hover:bg-white active:bg-white/95 transition-colors"
+                    className={cn(
+                        "flex items-center gap-2 rounded-full px-4 h-9 transition-colors shadow-md",
+                        "bg-background/90 backdrop-blur border border-border text-foreground",
+                        "hover:bg-background/95 active:bg-background"
+                    )}
                     aria-label="Zoom in to see pixels"
                 >
-                    <Info className="h-4 w-4 text-blue-600" />
+                    <Info className="h-4 w-4 text-blue-600 dark:text-blue-400" />
                     <span className="text-[13px] font-medium">Zoom in to see the pixels</span>
                 </button>
+
             </div>
         );
         return createPortal(content, document.body);
@@ -1389,41 +1396,16 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
             {/* Top-right controls (column) */}
             <TopRightControls
                 user={{ name: "Alice Johnson" }}
-
                 onLogin={onLogin}
                 onLocateMe={locateMe}
                 onRandom={flyRandom}
             />
             {/* Or: <TopRightControls loginHref="/auth" /> */}
 
-
             {/* Top-center zoom hint */}
             {/* Portal for top-center zoom hint so it sits above map (avoids stacking-context issues) */}
             {typeof window !== "undefined" && <ZoomHintPortal />}
 
-            {/* <div
-                aria-live="polite"
-                className={[
-                    "pointer-events-auto fixed left-1/2 top-4 z-[1200] -translate-x-1/2",
-                    "transition-opacity duration-200",
-                    showZoomHint ? "opacity-100" : "opacity-0 pointer-events-none"
-                ].join(" ")}
-            >
-                <button
-                    onClick={zoomToInteract}
-                    className={[
-                        "flex items-center gap-2 rounded-full px-4 h-9",
-                        "bg-white/95 backdrop-blur border border-black/10 text-black shadow-md",
-                        "hover:bg-white active:bg-white/95 transition-colors"
-                    ].join(" ")}
-                >
-                    <Info className="h-4 w-4 text-blue-600" />
-                    <span className="text-[13px] font-medium">Zoom in to see the pixels</span>
-                </button>
-            </div> */}
-
-
-            {/* Bottom-center Create button */}
             {/* Bottom-center Create button — hidden when modal is open */}
             {!selectionOpen && (
                 <BottomCenterAction
