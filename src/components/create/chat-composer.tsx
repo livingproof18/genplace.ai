@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { cn } from "@/lib/utils";
 import type { TokensState } from "@/hooks/use-tokens";
 import type { Model, Size } from "@/components/map/types";
+import { motion, AnimatePresence } from "framer-motion";
 
 const DRAFT_KEY = "genplace:composer:draft";
 const DRAFT_SAVED_AT_KEY = "genplace:composer:draftSavedAt";
@@ -125,16 +126,27 @@ export function ChatComposer({
 
     return (
         <>
-            <div
+            <motion.div
                 role="form"
                 aria-label="Image generation composer"
+                initial={{ opacity: 0, scale: 0.7, y: 40 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.7, y: 40 }}
+                transition={{
+                    type: "spring",
+                    stiffness: 280,
+                    damping: 24,
+                    mass: 0.7,
+                }}
                 className={cn(
                     "fixed bottom-[max(16px,env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2",
                     "w-[min(900px,92vw)] rounded-3xl border border-border/40 shadow-[0_10px_34px_rgba(0,0,0,0.28)] backdrop-blur-md",
                     "px-5 py-4 z-[1200] transition-all duration-300",
-                    "bg-white/90 text-foreground dark:bg-neutral-900/90 dark:text-neutral-100",
+                    "bg-white/90 text-foreground dark:bg-neutral-900/90 dark:text-neutral-100"
                 )}
             >
+
+
                 {/* Inner container gives relative positioning for close button */}
                 <div className="relative">
                     {/* Close (top-right) */}
@@ -146,7 +158,7 @@ export function ChatComposer({
                             "absolute -top-7 -right-8 h-9 w-9 grid place-items-center rounded-full",
                             // "bg-background/90 border border-border/40 shadow-sm backdrop-blur",
                             "bg-background/90 border border-border/40 shadow-[0_2px_10px_rgba(0,0,0,0.25)] backdrop-blur",
-                            "text-muted-foreground hover:text-foreground hover:bg-accent/50 active:scale-[0.97]",
+                            "text-muted-foreground hover:text-primary hover:bg-background active:scale-[0.97]",
                             "transition-all focus:outline-none focus:ring-2 focus:ring-primary",
                             "cursor-pointer"
                         )}
@@ -344,7 +356,7 @@ export function ChatComposer({
                     )}
                 </div>
 
-            </div>
+            </motion.div>
 
             {/* "Get More Tokens" Modal (Scaffolded Store UI) */}
             <Dialog open={getTokensOpen} onOpenChange={setGetTokensOpen}>

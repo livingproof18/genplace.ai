@@ -51,13 +51,6 @@ export function GenerationPanel({
     cooldownMs,
     genError,
 }: Props) {
-    React.useEffect(() => {
-        const key = (e: KeyboardEvent) => {
-            if (e.key === "Escape") onOpenChange(false);
-        };
-        window.addEventListener("keydown", key);
-        return () => window.removeEventListener("keydown", key);
-    }, [onOpenChange]);
 
     const [tipIndex, setTipIndex] = React.useState(0);
 
@@ -69,6 +62,15 @@ export function GenerationPanel({
         }, 3000);
         return () => clearInterval(interval);
     }, [generating]);
+
+    // React.useEffect(() => {
+    //     const key = (e: KeyboardEvent) => {
+    //         if (e.key === "Escape") onOpenChange(false);
+    //     };
+    //     window.addEventListener("keydown", key);
+    //     return () => window.removeEventListener("keydown", key);
+    // }, [onOpenChange]);
+
 
     const canPlace = !!selectedId && hasPoint && tokens.current > 0 && !generating;
     if (!open) return null;
@@ -248,7 +250,7 @@ export function GenerationPanel({
                         className={cn(
                             "rounded-full px-6 py-2 text-sm font-medium transition-all",
                             canPlace
-                                ? "bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98]"
+                                ? "bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] cursor-pointer"
                                 : "bg-muted text-muted-foreground cursor-not-allowed opacity-70"
                         )}
                     >

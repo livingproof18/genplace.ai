@@ -4,6 +4,7 @@
 import { Wand2, Sparkles, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import React from "react";
+import { motion } from "framer-motion";
 
 type Props = {
     label?: string;
@@ -48,18 +49,21 @@ export function BottomCenterAction({
             )}
             aria-live="polite"
         >
-            <button
+            <motion.button
                 ref={btnRef}
                 type="button"
                 onClick={disabled ? undefined : onClick}
                 aria-label="Create new image"
                 title={disabled ? cooldownText : tooltip}
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ type: "spring", duration: 0.35, delay: 0.2 }}
                 className={cn(
                     "pointer-events-auto rounded-full",
                     "min-w-[200px] h-14 px-5 sm:min-w-[220px] sm:h-14",
                     "inline-flex items-center justify-center gap-2",
                     "bg-primary text-primary-foreground",
-                    "border border-white/10",
+                    "border border-white/10 cursor-pointer",
                     "btn-glow transition will-change-transform",
                     "motion-safe:hover:scale-[1.03] hover:brightness-110",
                     disabled && "bg-primary/50 text-primary-foreground/70 cursor-not-allowed hover:scale-100 hover:brightness-100",
@@ -76,7 +80,7 @@ export function BottomCenterAction({
                         Locked
                     </span>
                 )}
-            </button>
+            </motion.button>
 
             <style jsx>{`
         @media (max-width: 480px) {

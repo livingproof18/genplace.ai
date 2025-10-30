@@ -29,7 +29,7 @@ export function ThemeToggle() {
     return (
         <button
             onClick={() => setTheme(isDark ? "light" : "dark")}
-            className="inline-flex h-10 items-center gap-2 rounded-2xl border border-border/50 px-4 hover:bg-card/60"
+            className="inline-flex h-10 items-center gap-2 rounded-2xl border border-border/50 px-4 cursor-pointer hover:bg-card/60"
             title="Toggle theme"
         >
             {isDark ? <Sun size={16} /> : <Moon size={16} />}

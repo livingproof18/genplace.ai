@@ -625,6 +625,7 @@ type Props = {
     hasTokens?: boolean;              // ⬅️ new: control disabled state
     cooldownLabel?: string;           // ⬅️ new: e.g. "Out of tokens — regenerates in 2:14"
     label?: string;                   // ⬅️ new: e.g. "Create 1/5"
+    generationMode?: boolean;          // ⬅️ new: whether in generation mode (affects UI)
 };
 
 
@@ -634,22 +635,23 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     hasTokens = true,
     cooldownLabel = "You're out of tokens — regenerates soon",
     label = "Create",
+    generationMode
 
 }: Props) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<any>(null);
     const center = useMemo<[number, number]>(() => [0, 20], []);
+    // keep a ref that always contains the latest generationMode
+    const generationModeRef = useRef<boolean | undefined>(generationMode);
+    useEffect(() => {
+        generationModeRef.current = generationMode;
+    }, [generationMode]);
+
 
     const [overlaysVisible, setOverlaysVisible] = useState(true);
 
     // --- hint: show when user is too zoomed out ---
     const [showZoomHint, setShowZoomHint] = useState(false);
-
-
-    // Geolocation cache key + TTL (ms). Keep cached loc for e.g. 24h (86400000 ms)
-    const GEO_CACHE_KEY = "genplace:geo_cache_v1";
-    const GEO_CACHE_TTL = 24 * 60 * 60 * 1000; // 24h
-
 
     // Track what we currently have on the map to avoid churn
     // track gp_* layers to toggle quickly
@@ -847,16 +849,22 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
 
 
     // open drawer with coords (Option A)
+    // open drawer with coords (Option A)
     const createForTile = (tile: TileMeta) => {
         setSelectionOpen(false);
-        // Tile-first path: open the drawer WITH a preset point (lat/lng).
-        // MapPage already listens for this and sets presetPoint  opens the drawer.
+        // Tile-first path: tell the app to open the composer with a preset point.
+        // We dispatch the same 'genplace:create' event the bottom Create uses,
+        // but with tile coords in detail so the parent knows this was tile-first.
         if (tile.lat != null && tile.lng != null) {
             window.dispatchEvent(
-                new CustomEvent("genplace:create:point", { detail: { lat: tile.lat, lng: tile.lng } })
+                new CustomEvent("genplace:create", { detail: { lat: tile.lat, lng: tile.lng } })
             );
+        } else {
+            // fallback: open composer with no presetPoint
+            window.dispatchEvent(new CustomEvent("genplace:create"));
         }
     };
+    ;
 
     useEffect(() => {
         // close modal if user zooms out below threshold
@@ -1058,35 +1066,47 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                         lng: clickLng,
                         painted: false,
                     };
-                    setSelectionTile(meta);
-                    setSelectionOpen(true);
-
-                    // before doing any async work, bump the selection sequence
-                    const seq = ++selectionSeqRef.current;
-
-                    // cancel any in-flight geocode
-                    geocodeAbortRef.current?.abort();
-                    geocodeAbortRef.current = new AbortController();
-
-                    // ... you already built initial meta and setSelectionTile(meta); setSelectionOpen(true);
 
 
-                    try {
-                        const loc = await reverseGeocode(clickLat, clickLng, geocodeAbortRef.current.signal);
-                        // Only apply if this is still the newest selection (no newer clicks happened)
-                        if (seq === selectionSeqRef.current) {
-                            setSelectionTile(prev => prev ? { ...prev, ...loc } : prev);
+                    //  trigger “create” flow (point-based)
+                    // ALWAYS dispatch the point event so parent gets the coords and can set presetPoint
+                    window.dispatchEvent(new CustomEvent("genplace:create:point", {
+                        detail: { lat: clickLat, lng: clickLng, zoom: z }
+                    }));
+
+                    // If generationMode (panel open) we intentionally DO NOT open the selection modal.
+                    // We still keep the marker and set checkpoint so the user sees the pin.
+                    const genMode = !!generationModeRef.current;
+                    console.log("generationMode Panel Open (ref):", genMode);
+                    if (!genMode) {
+                        console.log("tile-first click: opening selection modal");
+                        // normal tile-first flow: open modal and run reverse geocode
+                        setSelectionTile(meta);
+                        setSelectionOpen(true);
+
+                        // before doing any async work, bump the selection sequence
+                        const seq = ++selectionSeqRef.current;
+
+                        // cancel any in-flight geocode
+                        geocodeAbortRef.current?.abort();
+                        geocodeAbortRef.current = new AbortController();
+
+                        try {
+                            const loc = await reverseGeocode(clickLat, clickLng, geocodeAbortRef.current.signal);
+                            // Only apply if this is still the newest selection (no newer clicks happened)
+                            if (seq === selectionSeqRef.current) {
+                                setSelectionTile(prev => prev ? { ...prev, ...loc } : prev);
+                            }
+                        } catch (err: any) {
+                            // Ignore aborts; log other errors
+                            if (err?.name !== "AbortError") console.warn("reverseGeocode failed", err);
                         }
-                    } catch (err: any) {
-                        // Ignore aborts; log other errors
-                        if (err?.name !== "AbortError") console.warn("reverseGeocode failed", err);
+                    } else {
+                        // generation mode: skip modal + reverse geocode (parent's panel will show Place button once hasPoint is true)
+                        // (selectionTile/selectionOpen remain untouched)
                     }
 
 
-                    // Optional: trigger “create” flow (point-based)
-                    // window.dispatchEvent(new CustomEvent("genplace:create:point", {
-                    //     detail: { lat: clickLat, lng: clickLng, zoom: z, pixelX: px.x, pixelY: px.y, gridZ: px.gridZ }
-                    // }));
                 });
 
 
@@ -1395,7 +1415,7 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
 
             {/* Top-right controls (column) */}
             <TopRightControls
-                user={{ name: "Alice Johnson" }}
+                user={{ name: "Alice Johnson", username: "alicej", userId: "1234", firstName: "Alice" }} // or null for logged-out
                 onLogin={onLogin}
                 onLocateMe={locateMe}
                 onRandom={flyRandom}

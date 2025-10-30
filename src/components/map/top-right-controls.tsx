@@ -119,7 +119,7 @@ export function TopRightControls({
                         title={user.name ? `Signed in as ${user.name}` : "Profile"}
                         aria-label={user.name ? `Signed in as ${user.name}` : "Profile"}
                         className="inline-grid h-9 w-9 place-items-center rounded-full shadow-sm hover:scale-[1.03] active:scale-95 transition-transform bg-white/85 dark:bg-slate-800/70 border border-black/8 dark:border-white/6"
-                        style={{ padding: 2 }}
+
                     >
                         <span
                             className="inline-grid h-8 w-8 place-items-center rounded-full text-xs font-semibold"
