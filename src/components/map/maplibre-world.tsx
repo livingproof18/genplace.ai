@@ -1407,7 +1407,7 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
             {typeof window !== "undefined" && <ZoomHintPortal />}
 
             {/* Bottom-center Create button — hidden when modal is open */}
-            {!selectionOpen && (
+            {/* {!selectionOpen && (
                 <BottomCenterAction
                     label={label ?? "Create"}
                     icon="wand"
@@ -1416,7 +1416,7 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                     cooldownText={cooldownLabel}
                     tooltip="Type a prompt → generate → place it on the map"
                 />
-            )}
+            )} */}
 
             {/* NEW: Bottom-center Selection Modal */}
             <SelectionModal

@@ -9,6 +9,10 @@ import { mmss } from "@/lib/time";
 
 import { ChatComposer } from "@/components/create/chat-composer";
 import { GenerationPanel, type Variant } from "@/components/create/generation-panel";
+import { BottomCenterAction } from "@/components/map/bottom-center-action";
+
+const DRAFT_KEY = "genplace:composer:draft";
+const DRAFT_SAVED_AT_KEY = "genplace:composer:draftSavedAt";
 
 const MapLibreWorld = dynamic(
     () => import("@/components/map/maplibre-world").then((m) => m.MapLibreWorld),
@@ -35,23 +39,48 @@ export default function MapPage() {
 
     const [genError, setGenError] = useState<string | null>(null);
 
+    // NEW: gate the ChatComposer
+    const [composerOpen, setComposerOpen] = useState(false);
 
     // === util ===
     const cooldownMs = Math.max(0, tokens.nextRegenAt - Date.now());
     const canSubmit = prompt.trim().length > 0 && tokens.current > 0 && !generating;
 
     // === events from map ===
+    // === events from map ===
     useEffect(() => {
         const onPoint = (e: any) => {
             const d = e?.detail;
             if (!d) return;
             setPresetPoint({ lat: d.lat, lng: d.lng });
-            // For tile-first, focus the composer; generation starts only when they submit.
-            window.dispatchEvent(new CustomEvent("genplace:composer:focus"));
+
+            // OPEN the composer when selection modal's Create is used (tile-first)
+            setComposerOpen(true);
+
+            // focus the textarea
+            // (timeout avoids race if composer is just mounting)
+            setTimeout(() => {
+                window.dispatchEvent(new CustomEvent("genplace:composer:focus"));
+            }, 0);
         };
+
+        // Optional: support a generic "open create" event if you fire it elsewhere
+        const onOpenCreate = () => {
+            setPresetPoint(null);
+            setComposerOpen(true);
+            setTimeout(() => {
+                window.dispatchEvent(new CustomEvent("genplace:composer:focus"));
+            }, 0);
+        };
+
         window.addEventListener("genplace:create:point", onPoint as any);
-        return () => window.removeEventListener("genplace:create:point", onPoint as any);
+        window.addEventListener("genplace:create", onOpenCreate as any);
+        return () => {
+            window.removeEventListener("genplace:create:point", onPoint as any);
+            window.removeEventListener("genplace:create", onOpenCreate as any);
+        };
     }, []);
+
 
     // === fake services (reuse your previous logic) ===
     function hash(s: string) {
@@ -98,10 +127,15 @@ export default function MapPage() {
         }
     }
 
+    // submit → open panel and (optionally) hide composer to keep the screen clean
+    // submit → open panel and (optionally) hide composer to keep the screen clean
     async function onSubmitFromComposer() {
         if (!canSubmit) return;
-        // open panel and start generating
         setPanelOpen(true);
+        setComposerOpen(false); // hide composer
+        // dispatch closed so bottom button can receive focus once mounted
+        setTimeout(() => window.dispatchEvent(new CustomEvent("genplace:composer:closed")), 60);
+
         setVariants([]);
         setSelectedId(null);
         setGenerating(true);
@@ -110,14 +144,9 @@ export default function MapPage() {
             const imgs = await doGenerate();
             setVariants(imgs.slice(0, 2));
         } catch (err) {
-            // Show error banner in panel
             setVariants([]);
             setSelectedId(null);
-            // store an ephemeral error as a "pseudo variant" message handled by the panel prop
-            // (we’ll pass the error down via prop)
-            const message =
-                err instanceof Error ? err.message : "Something went wrong. Try again.";
-
+            const message = err instanceof Error ? err.message : "Something went wrong. Try again.";
             setGenError(message);
         } finally {
             setGenerating(false);
@@ -155,11 +184,15 @@ export default function MapPage() {
             },
         ]);
 
+        // clear persisted draft on place (user finished the prompt)
+        try {
+            localStorage.removeItem(DRAFT_KEY);
+            localStorage.removeItem(DRAFT_SAVED_AT_KEY);
+        } catch { }
+
         // close panel & clear selection (keep prompt for quick re-run)
         setPanelOpen(false);
         setSelectedId(null);
-        // keep presetPoint so they can re-roll/replace in same area; clear if you prefer:
-        // setPresetPoint(null);
     }
 
     return (
@@ -169,30 +202,59 @@ export default function MapPage() {
                 placements={placements}
                 onClickEmpty={() => { }}
                 onClickPlacement={() => { }}
-                // The old “Create” button is removed; composer is now always on screen.
                 hasTokens={tokens.current > 0}
                 cooldownLabel={`Out of tokens — regenerates in ${mmss(cooldownMs)}`}
                 label={`Create ${tokens.current}/${tokens.max}`}
             />
 
-            {/* Bottom-center Chat Composer */}
-            <ChatComposer
-                tokens={tokens}
-                prompt={prompt}
-                onPrompt={setPrompt}
-                model={model}
-                onModel={setModel}
-                size={size}
-                onSize={setSize}
-                onSubmit={onSubmitFromComposer}
-                canSubmit={canSubmit}
-                cooldownLabel={`Next +1 in ${mmss(cooldownMs)}`}
-            />
+            {/* Show the main bottom "Create" button only when the composer is closed */}
+            {!composerOpen && (
+                <BottomCenterAction
+                    label={`Create ${tokens.current}/${tokens.max}`}
+                    disabled={tokens.current <= 0}
+                    cooldownText={`Out of tokens — regenerates in ${mmss(cooldownMs)}`}
+                    onClick={() => {
+                        // idea-first create
+                        setPresetPoint(null);
+                        setComposerOpen(true);
+                        setTimeout(() => {
+                            window.dispatchEvent(new CustomEvent("genplace:composer:focus"));
+                        }, 0);
+                    }}
+                />
+            )}
+
+            {/* Bottom-center Chat Composer — only render when opened from the two entry points */}
+            {composerOpen && (
+                <ChatComposer
+                    tokens={tokens}
+                    prompt={prompt}
+                    onPrompt={setPrompt}
+                    model={model}
+                    onModel={setModel}
+                    size={size}
+                    onSize={setSize}
+                    onSubmit={onSubmitFromComposer}
+                    onClose={() => {
+                        setComposerOpen(false);
+                        // ensure bottom button mounts and then focus it
+                        setTimeout(() => window.dispatchEvent(new CustomEvent("genplace:composer:closed")), 60);
+                    }}
+                    canSubmit={canSubmit}
+                    cooldownLabel={`Next +1 in ${mmss(cooldownMs)}`}
+                />
+            )}
 
             {/* Right-docked Generation Panel */}
             <GenerationPanel
                 open={panelOpen}
-                onOpenChange={setPanelOpen}
+                onOpenChange={(v) => {
+                    setPanelOpen(v);
+                    // Optional: when panel closes, bring back the bottom button (composer stays closed)
+                    if (!v) {
+                        // if you prefer to auto-reopen composer after closing panel, setComposerOpen(true) instead
+                    }
+                }}
                 model={model}
                 size={size}
                 tokens={tokens}
@@ -202,12 +264,11 @@ export default function MapPage() {
                 onSelect={setSelectedId}
                 onRegenerateSlot={regenerateOne}
                 genError={genError}
-                // inform panel whether we have a point yet (idea-first vs tile-first banner)
                 hasPoint={!!presetPoint}
                 onPlace={onPlaceSelected}
                 cooldownMs={cooldownMs}
-            // when tile-first “Create” was clicked, focus already set by event
             />
         </div>
     );
+
 }
