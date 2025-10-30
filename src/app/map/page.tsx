@@ -2,14 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import type { PointPlacement } from "@/components/map/types";
-import type { Model } from "@/components/map/types"; // or wherever you put it
+import type { PointPlacement, Size, Model } from "@/components/map/types";
 
 import { useTokens } from "@/hooks/use-tokens";
 import { mmss } from "@/lib/time";
 
 import { ChatComposer } from "@/components/create/chat-composer";
-import { GenerationPanel, type Variant, type Size } from "@/components/create/generation-panel";
+import { GenerationPanel, type Variant } from "@/components/create/generation-panel";
 
 const MapLibreWorld = dynamic(
     () => import("@/components/map/maplibre-world").then((m) => m.MapLibreWorld),
@@ -33,6 +32,9 @@ export default function MapPage() {
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [panelOpen, setPanelOpen] = useState(false);
     const lastGenAtRef = useRef(0);
+
+    const [genError, setGenError] = useState<string | null>(null);
+
 
     // === util ===
     const cooldownMs = Math.max(0, tokens.nextRegenAt - Date.now());
@@ -103,6 +105,7 @@ export default function MapPage() {
         setVariants([]);
         setSelectedId(null);
         setGenerating(true);
+        setGenError(null);
         try {
             const imgs = await doGenerate();
             setVariants(imgs.slice(0, 2));
@@ -112,6 +115,10 @@ export default function MapPage() {
             setSelectedId(null);
             // store an ephemeral error as a "pseudo variant" message handled by the panel prop
             // (we’ll pass the error down via prop)
+            const message =
+                err instanceof Error ? err.message : "Something went wrong. Try again.";
+
+            setGenError(message);
         } finally {
             setGenerating(false);
         }
@@ -194,6 +201,7 @@ export default function MapPage() {
                 selectedId={selectedId}
                 onSelect={setSelectedId}
                 onRegenerateSlot={regenerateOne}
+                genError={genError}
                 // inform panel whether we have a point yet (idea-first vs tile-first banner)
                 hasPoint={!!presetPoint}
                 onPlace={onPlaceSelected}

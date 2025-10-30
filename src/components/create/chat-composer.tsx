@@ -9,9 +9,8 @@ import { Rocket, ChevronDown, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { TokensState } from "@/hooks/use-tokens";
 import { X } from "lucide-react";
-import type { Model } from "@/components/map/types";
+import type { Model, Size } from "@/components/map/types";
 
-export type Size = 128 | 256 | 512;
 
 
 type Props = {
@@ -44,6 +43,15 @@ export function ChatComposer({
     const [inspOpen, setInspOpen] = React.useState(false);
     const [sizeOpen, setSizeOpen] = React.useState(false);
     const taRef = React.useRef<HTMLTextAreaElement | null>(null);
+
+    React.useEffect(() => {
+        const onFocusComposer = () => {
+            taRef.current?.focus();
+            taRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        };
+        window.addEventListener("genplace:composer:focus", onFocusComposer);
+        return () => window.removeEventListener("genplace:composer:focus", onFocusComposer);
+    }, []);
 
     const tokenHud =
         `Tokens ${tokens.current}/${tokens.max}` +

@@ -55,16 +55,42 @@
   --primary: 217 91% 60%;
   --primary-foreground: 0 0% 100%;
 
-  /* surfaces & neutrals */
+  /* Secondary (soft neutral gray surface) */
+  --secondary: 220 13% 94%;
+  --secondary-foreground: 222 47% 11%;
+
+  /* Muted backgrounds (for subdued surfaces, skeletons, etc.) */
+  --muted: 220 13% 95%;
+  --muted-foreground: 220 8% 45%;
+
+  /* Accent (used for highlight hover states or subtle interactive elements) */
+  --accent: 220 13% 90%;
+  --accent-foreground: 222 47% 11%;
+
+  /* Card / surface */
   --card: 0 0% 100%;
   --card-foreground: 222 47% 11%;
+
+  /* Popover / dropdowns */
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+
+  /* Borders / inputs */
   --border: 220 13% 91%;
   --input: 220 13% 91%;
   --ring: 217 91% 60%;
 
-  /* popover backgrounds (solid) */
-  --popover: 0 0% 100%;
-  --popover-foreground: 222 47% 11%;
+  /* Destructive (error / delete actions) */
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 98%;
+
+  /* Success / informational states */
+  --success: 142 76% 36%;
+  --success-foreground: 0 0% 100%;
+
+  /* Warning */
+  --warning: 45 100% 51%;
+  --warning-foreground: 0 0% 10%;
 }
 
 /* DARK MODE */
@@ -77,14 +103,42 @@
   --primary: 217 91% 60%;
   --primary-foreground: 0 0% 100%;
 
+  /* Secondary (dark gray surface) */
+  --secondary: 220 8% 20%;
+  --secondary-foreground: 210 40% 96%;
+
+  /* Muted (for subtle background sections or disabled states) */
+  --muted: 220 8% 18%;
+  --muted-foreground: 220 10% 65%;
+
+  /* Accent (slightly lighter for hover states) */
+  --accent: 220 10% 28%;
+  --accent-foreground: 210 40% 98%;
+
+  /* Card / surface */
   --card: 0 0% 6%;
   --card-foreground: 0 0% 98%;
+
+  /* Popover */
+  --popover: 0 0% 8%;
+  --popover-foreground: 0 0% 98%;
+
+  /* Borders / inputs */
   --border: 220 14% 22%;
   --input: 220 14% 22%;
   --ring: 217 91% 60%;
 
-  --popover: 0 0% 6%;
-  --popover-foreground: 0 0% 98%;
+  /* Destructive (error / delete actions) */
+  --destructive: 0 63% 45%;
+  --destructive-foreground: 0 0% 100%;
+
+  /* Success / informational states */
+  --success: 142 70% 35%;
+  --success-foreground: 0 0% 100%;
+
+  /* Warning */
+  --warning: 45 90% 55%;
+  --warning-foreground: 0 0% 8%;
 }
 
 @layer base {
