@@ -198,7 +198,7 @@ export default function MapPage() {
                 lat: presetPoint.lat,
                 lng: presetPoint.lng,
                 pixelSize: size,
-                anchor: "bottom",
+                anchor: "center",
             },
         ]);
 
