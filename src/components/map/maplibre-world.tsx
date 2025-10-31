@@ -1261,10 +1261,10 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                         "bg-background/90 backdrop-blur border border-border text-foreground",
                         "hover:bg-background/95 active:bg-background"
                     )}
-                    aria-label="Zoom in to see pixels"
+                    aria-label="Zoom in to see the Map"
                 >
                     <Info className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                    <span className="text-[13px] font-medium">Zoom in to see the pixels</span>
+                    <span className="text-[13px] font-medium">Zoom in to see the map</span>
                 </button>
 
             </div>

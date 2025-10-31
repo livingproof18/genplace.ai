@@ -158,6 +158,7 @@ export default function MapPage() {
 
         try {
             const imgs = await doGenerate();
+            console.log("Generated images:", imgs);
             setVariants(imgs.slice(0, 2));
         } catch (err) {
             setVariants([]);
@@ -175,6 +176,7 @@ export default function MapPage() {
         // simulate place
         await new Promise((r) => setTimeout(r, 600 + Math.random() * 600));
         const picked = variants.find((v) => v.id === selectedId);
+        console.log("Placing image:", picked, "at", presetPoint);
         if (!picked) return;
 
         // consume 1 token
