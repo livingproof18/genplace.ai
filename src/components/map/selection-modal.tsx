@@ -7,6 +7,8 @@ import { cn } from "@/lib/utils";
 import { useTheme } from "next-themes";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
+import { motion, AnimatePresence } from "framer-motion";
+import { Heart } from "lucide-react";
 
 export type TileMeta = {
     x: number;
@@ -52,6 +54,7 @@ export function SelectionModal({
     // Colors helper (unchanged behaviour, kept for UI)
     const safeHsl = (h: number, s = 62, l = 45) => `hsl(${h} ${s}% ${l}%)`;
     const lightnessToTextColor = (l: number) => (l > 60 ? "#111827" : "#ffffff");
+    const [liked, setLiked] = React.useState(false);
 
     const {
         accentColor,
@@ -333,9 +336,47 @@ export function SelectionModal({
                         </div>
                     </div>
 
-                    <button aria-label="Close selection" onClick={onClose} className="h-8 w-8 grid place-items-center rounded-full text-black/70 hover:text-black hover:bg-black/5 active:bg-black/10 transition-colors hover:scale-[1.05] active:scale-95 hover:cursor-pointer dark:text-white/70 dark:hover:text-white dark:hover:bg-white/5">
-                        <X className="h-4 w-4" />
-                    </button>
+                    <div className="flex items-center gap-2">
+                        {/* Like / Heart button
+                        // <motion.button
+                        //     aria-label={liked ? "Unlike" : "Like this tile"}
+                        //     onClick={() => setLiked(!liked)}
+                        //     whileTap={{ scale: 0.8 }}
+                        //     whileHover={{ scale: 1.1 }}
+                        //     className={cn(
+                        //         "h-8 w-8 grid place-items-center rounded-full transition-all cursor-pointer",
+                        //         liked
+                        //             ? "text-red-500 hover:text-red-600"
+                        //             : "text-gray-400 hover:text-red-400 dark:text-gray-500 dark:hover:text-red-400",
+                        //         "hover:bg-black/5 dark:hover:bg-white/10 active:scale-95"
+                        //     )}
+                        // >
+                        //     <motion.div
+                        //         key={liked ? "liked" : "unliked"}
+                        //         initial={{ scale: 0 }}
+                        //         animate={{ scale: 1 }}
+                        //         exit={{ scale: 0 }}
+                        //         transition={{ type: "spring", stiffness: 400, damping: 20 }}
+                        //     >
+                        //         <Heart
+                        //             className={cn(
+                        //                 "h-4.5 w-4.5 transition-colors duration-300",
+                        //                 liked ? "fill-red-500 text-red-500" : "fill-none text-current"
+                        //             )}
+                        //         />
+                        //     </motion.div>
+                        // </motion.button> */}
+
+                        {/* Close button */}
+                        <button
+                            aria-label="Close selection"
+                            onClick={onClose}
+                            className="h-8 w-8 grid place-items-center rounded-full text-black/70 hover:text-black hover:bg-black/5 active:bg-black/10 transition-colors hover:scale-[1.05] active:scale-95 hover:cursor-pointer dark:text-white/70 dark:hover:text-white dark:hover:bg-white/5"
+                        >
+                            <X className="h-4.5 w-4.5" />
+                        </button>
+                    </div>
+
                 </div>
 
                 <div className="mt-4 flex flex-wrap items-center gap-2.5">
@@ -346,6 +387,39 @@ export function SelectionModal({
                     <button aria-label={`Share link to tile ${tile.x},${tile.y}`} onClick={handleOpenShare} className={cn("inline-flex items-center gap-2 rounded-full px-5 h-11 bg-gray-100 text-gray-900 border border-black/10 hover:bg-gray-200 active:bg-gray-200/90 transition-colors hover:cursor-pointer dark:bg-gray-800 dark:text-gray-100 dark:border-white/10 dark:hover:bg-gray-700/90")}>
                         <Share2 className="h-4.5 w-4.5" /><span className="text-[15px] font-medium">Share</span>
                     </button>
+
+
+                    {/* Like / Heart Button */}
+                    <motion.button
+                        aria-label={liked ? "Unlike" : "Like this tile"}
+                        onClick={() => setLiked(!liked)}
+                        whileTap={{ scale: 0.9 }}
+                        whileHover={{ scale: 1.08 }}
+                        className={cn(
+                            "inline-flex items-center justify-center rounded-full h-11 w-11",
+                            "transition-all cursor-pointer border border-border/50 bg-background/30 backdrop-blur",
+                            liked
+                                ? "text-red-500 border-red-300 dark:border-red-700"
+                                : "text-muted-foreground hover:text-red-500",
+                            "hover:bg-accent/40 active:scale-95"
+                        )}
+                    >
+                        <motion.div
+                            key={liked ? "liked" : "unliked"}
+                            initial={{ scale: 0 }}
+                            animate={{ scale: 1 }}
+                            exit={{ scale: 0 }}
+                            transition={{ type: "spring", stiffness: 400, damping: 20 }}
+                        >
+                            <Heart
+                                className={cn(
+                                    "h-6 w-6 transition-colors duration-300",
+                                    liked ? "fill-red-500 text-red-500" : "fill-none text-current"
+                                )}
+                            />
+                        </motion.div>
+                    </motion.button>
+
                 </div>
             </div>
 
