@@ -630,7 +630,7 @@ function makeGhostImageEl(url: string): HTMLDivElement {
         boxShadow: "0 0 12px rgba(0,0,0,0.25)",
         transition: "transform 280ms cubic-bezier(0.22,1,0.36,1), opacity 0.25s ease, filter 160ms linear",
         willChange: "transform, opacity, filter",
-        opacity: "0.75",
+        opacity: "0.65",
         objectFit: "cover",
     });
 
@@ -1320,6 +1320,24 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                 ghostMarkerRef.current = new gl.Marker({ element: wrapper, anchor: "center" })
                     .setLngLat([checkpoint.lng, checkpoint.lat])
                     .addTo(map);
+
+                // after adding/updating the ghost marker, force the pin to the front
+                try {
+                    const pin = markerRef.current;
+                    if (pin && typeof pin.getElement === "function") {
+                        const el = pin.getElement() as HTMLElement | null;
+                        if (el) {
+                            // extra safety: set a high z-index on the pin root
+                            el.style.zIndex = "9999";
+                            // re-append the pin element to its parent so it becomes the last child (on top)
+                            const parent = el.parentElement;
+                            if (parent) parent.appendChild(el);
+                        }
+                    }
+                } catch (err) {
+                    // ignore — defensive
+                }
+
             } else {
                 const wrapper = ghostElRef.current!;
                 const img = wrapper.querySelector("img") as HTMLImageElement | null;
@@ -1330,6 +1348,16 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                 } catch (e) {
                     // defensive: if the marker was removed concurrently, ignore
                 }
+                try {
+                    const pin = markerRef.current;
+                    if (pin && typeof pin.getElement === "function") {
+                        const el = pin.getElement() as HTMLElement | null;
+                        if (el) {
+                            el.style.zIndex = "9999";
+                            el.parentElement?.appendChild(el);
+                        }
+                    }
+                } catch { }
             }
         })();
 
