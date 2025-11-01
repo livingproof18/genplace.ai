@@ -309,22 +309,7 @@ function makeMarkerElPin(color = "#3B82F6") {
     return root as HTMLDivElement;
 }
 
-function makeClickDotEl() {
-    const el = document.createElement("div");
-    el.style.width = "10px";
-    el.style.height = "10px";
-    el.style.borderRadius = "9999px";
-    el.style.background = "white";
-    el.style.boxShadow = "0 0 0 2px rgba(59,130,246,.9), 0 6px 16px rgba(0,0,0,.28)";
-    el.style.transform = "translate(-50%, -50%)";
-    el.style.opacity = "1";
-    el.style.transition = "transform 300ms ease, opacity 300ms ease";
-    requestAnimationFrame(() => {
-        el.style.transform = "translate(-50%, -50%) scale(1.35)";
-        el.style.opacity = "0";
-    });
-    return el;
-}
+
 
 const CLICK_TILE_SRC = "gp__click_tile_src";
 const CLICK_TILE_LAYER = "gp__click_tile_layer";
@@ -613,6 +598,22 @@ async function reverseGeocode(lat: number, lng: number, signal?: AbortSignal) {
     };
 }
 
+function makeGhostImageEl(url: string) {
+    const img = document.createElement("img");
+    img.src = url;
+    img.draggable = false;
+    Object.assign(img.style, {
+        width: "128px",
+        height: "128px",
+        borderRadius: "12px",
+        opacity: "0.6",
+        pointerEvents: "none",
+        transform: "translate(-50%, -50%)",
+        boxShadow: "0 0 10px rgba(0,0,0,0.25)",
+        transition: "opacity 0.25s ease",
+    });
+    return img;
+}
 
 
 // === Component ===
@@ -626,6 +627,8 @@ type Props = {
     cooldownLabel?: string;           // ⬅️ new: e.g. "Out of tokens — regenerates in 2:14"
     label?: string;                   // ⬅️ new: e.g. "Create 1/5"
     generationMode?: boolean;          // ⬅️ new: whether in generation mode (affects UI)
+    previewUrl?: string | null;     // ← add
+
 };
 
 
@@ -635,7 +638,8 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     hasTokens = true,
     cooldownLabel = "You're out of tokens — regenerates soon",
     label = "Create",
-    generationMode
+    generationMode,
+    previewUrl
 
 }: Props) {
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -646,6 +650,8 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     useEffect(() => {
         generationModeRef.current = generationMode;
     }, [generationMode]);
+    const ghostMarkerRef = useRef<any>(null);
+    const ghostElRef = useRef<HTMLImageElement | null>(null);
 
 
     const [overlaysVisible, setOverlaysVisible] = useState(true);
@@ -864,7 +870,19 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
             window.dispatchEvent(new CustomEvent("genplace:create"));
         }
     };
-    ;
+
+    useEffect(() => {
+        const clear = () => {
+            if (ghostMarkerRef.current) {
+                ghostMarkerRef.current.remove();
+                ghostMarkerRef.current = null;
+                ghostElRef.current = null;
+            }
+        };
+        window.addEventListener("genplace:preview:clear", clear);
+        return () => window.removeEventListener("genplace:preview:clear", clear);
+    }, []);
+
 
     useEffect(() => {
         // close modal if user zooms out below threshold
@@ -1227,6 +1245,51 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
         })();
     }, [placements, sizePx]);
 
+    // --- ghost preview handler ---
+    useEffect(() => {
+        const map = mapRef.current;
+        if (!map || !map.isStyleLoaded?.()) return;
+
+        // cleanup existing ghost if previewUrl is gone
+        if (!previewUrl) {
+            if (ghostMarkerRef.current) {
+                ghostMarkerRef.current.remove();
+                ghostMarkerRef.current = null;
+                ghostElRef.current = null;
+            }
+            return;
+        }
+
+        // if no checkpoint yet, don't show ghost
+        if (!checkpoint) return;
+
+        (async () => {
+            const gl = (await import("maplibre-gl")).default;
+
+            // if marker doesn't exist yet, create it
+            if (!ghostMarkerRef.current) {
+                const el = makeGhostImageEl(previewUrl);
+                ghostElRef.current = el;
+                ghostMarkerRef.current = new gl.Marker({ element: el, anchor: "center" })
+                    .setLngLat([checkpoint.lng, checkpoint.lat])
+                    .addTo(map);
+            } else {
+                // update image URL if variant changed
+                const el = ghostElRef.current!;
+                if (el.src !== previewUrl) el.src = previewUrl;
+                ghostMarkerRef.current.setLngLat([checkpoint.lng, checkpoint.lat]);
+            }
+        })();
+
+        // cleanup when component unmounts
+        return () => {
+            if (ghostMarkerRef.current) {
+                ghostMarkerRef.current.remove();
+                ghostMarkerRef.current = null;
+                ghostElRef.current = null;
+            }
+        };
+    }, [previewUrl, checkpoint]);
 
 
 

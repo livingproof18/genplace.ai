@@ -5,6 +5,7 @@ import { MosaicPreview } from "@/components/mosaic-preview";
 import { HowItWorks } from "@/components/how-it-works";
 import { LiveTicker } from "@/components/live-ticker";
 import { Button } from "@/components/ui/button";
+import { Users, Sparkles, Clock } from "lucide-react";
 
 export default function Home() {
   return (
@@ -18,34 +19,52 @@ export default function Home() {
         <div className="absolute inset-0 bg-noise opacity-70" />
         <div className="vignette absolute inset-0" />
 
-        <div className="relative mx-auto max-w-7xl px-4 py-16 md:py-24 grid md:grid-cols-2 gap-10 items-center">
-          {/* Left copy */}
-          <div className="space-y-6">
-            <h1 className="text-4xl md:text-5xl font-semibold tracking-tight">
-              GenPlace: the place where <span className="text-primary">prompts</span> come alive
+        <div className="relative mx-auto max-w-5xl px-4 py-20 md:py-28 flex flex-col items-start md:items-center">
+          {/* Centered copy (mosaic hidden for MVP) */}
+          <div className="w-full md:w-[80%] lg:w-[60%] text-left md:text-center space-y-6">
+            <h1 className="text-4xl md:text-5xl font-semibold tracking-tight leading-tight">
+              GenPlace — where <span className="text-primary">prompts</span> become shared art
             </h1>
-            <p className="text-base md:text-lg text-muted-foreground max-w-prose">
-              Type a prompt, generate AI art, and place it onto a shared world.
-              Watch the canvas evolve in real time.
+
+            <p className="text-base md:text-lg text-muted-foreground max-w-prose mx-0 md:mx-auto">
+              Type a prompt, generate AI art, and place it onto a shared canvas. Collaborate,
+              explore, and watch the world evolve one tile at a time.
             </p>
-            <div className="pt-2">
+
+            <div className="pt-2 flex flex-col sm:flex-row sm:justify-center gap-3">
               <Button asChild size="lg" className="rounded-2xl btn-glow">
                 <Link href="/map">Go to Canvas</Link>
               </Button>
+
+              <Button
+                variant="ghost"
+                asChild
+                size="lg"
+                className="rounded-2xl border border-border/40 px-5"
+              >
+                <Link href="/about">Learn more</Link>
+              </Button>
+            </div>
+
+            {/* Small supportive line */}
+            <div className="mt-4 text-sm text-muted-foreground md:mx-auto">
+              Free for experimentation — tokens limit generation rate for a playful shared experience.
             </div>
           </div>
 
-          {/* Right: animated mosaic */}
-          <div className="flex justify-center md:justify-end">
+          {/* Right: animated mosaic — HIDDEN for MVP but kept in DOM */}
+          <div className="mt-10 hidden" aria-hidden>
             <MosaicPreview cols={6} rows={4} size={88} showCaption />
           </div>
         </div>
       </section>
 
-      {/* Live activity (keep, but soften outlines) */}
+      {/* Live activity (hidden for MVP) */}
       <section className="py-8 md:py-12">
         <div className="mx-auto max-w-7xl px-4">
-          <LiveTicker />
+          <div className="hidden" aria-hidden>
+            <LiveTicker />
+          </div>
         </div>
       </section>
 
@@ -57,16 +76,61 @@ export default function Home() {
       {/* Why GenPlace */}
       <section className="mx-auto max-w-7xl px-4 pb-16">
         <div className="rounded-2xl glass ring-gradient p-6 md:p-8">
-          <h2 className="text-2xl md:text-3xl font-semibold tracking-tight mb-4">Why GenPlace</h2>
-          <ul className="grid md:grid-cols-3 gap-3 text-sm text-muted-foreground">
-            <li className="rounded-xl glass p-4">
-              <span className="font-medium text-foreground">Social</span> — build together on one living canvas.
+          <h2 className="text-2xl md:text-3xl font-semibold tracking-tight mb-6 text-foreground">Why GenPlace</h2>
+
+          <ul className="grid md:grid-cols-3 gap-4">
+            {/* Card 1 */}
+            <li
+              className="group flex items-start gap-4 p-4 rounded-2xl bg-card/60 border border-border/40 transition-shadow hover:shadow-glow focus-within:shadow-glow"
+              tabIndex={0}
+            >
+              <div
+                className="flex-shrink-0 grid place-items-center h-12 w-12 rounded-xl"
+                style={{ background: "color-mix(in srgb, var(--color-primary) 8%, transparent)" }}
+                aria-hidden
+              >
+                <Users className="h-6 w-6 text-primary" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-foreground">Social</div>
+                <p className="mt-1 text-sm text-muted-foreground">Collaborate on a living canvas — see others' creations and contribute your own.</p>
+              </div>
             </li>
-            <li className="rounded-xl glass p-4">
-              <span className="font-medium text-foreground">Generative</span> — anyone can create with a single prompt.
+
+            {/* Card 2 */}
+            <li
+              className="group flex items-start gap-4 p-4 rounded-2xl bg-card/60 border border-border/40 transition-shadow hover:shadow-glow focus-within:shadow-glow"
+              tabIndex={0}
+            >
+              <div
+                className="flex-shrink-0 grid place-items-center h-12 w-12 rounded-xl"
+                style={{ background: "color-mix(in srgb, var(--color-accent) 8%, transparent)" }}
+                aria-hidden
+              >
+                <Sparkles className="h-6 w-6 text-primary" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-foreground">Generative</div>
+                <p className="mt-1 text-sm text-muted-foreground">One prompt is all it takes — generate expressive art with configurable size & style.</p>
+              </div>
             </li>
-            <li className="rounded-xl glass p-4">
-              <span className="font-medium text-foreground">Gamey</span> — cooldowns, levels, and friendly rivalry.
+
+            {/* Card 3 */}
+            <li
+              className="group flex items-start gap-4 p-4 rounded-2xl bg-card/60 border border-border/40 transition-shadow hover:shadow-glow focus-within:shadow-glow"
+              tabIndex={0}
+            >
+              <div
+                className="flex-shrink-0 grid place-items-center h-12 w-12 rounded-xl"
+                style={{ background: "color-mix(in srgb, var(--color-muted) 10%, transparent)" }}
+                aria-hidden
+              >
+                <Clock className="h-6 w-6 text-primary" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-foreground">Persistent</div>
+                <p className="mt-1 text-sm text-muted-foreground">Creations persist on the shared map — revisit and remix the community's evolving story.</p>
+              </div>
             </li>
           </ul>
         </div>

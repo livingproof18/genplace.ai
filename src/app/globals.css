@@ -195,8 +195,9 @@
 }
 
 /* Glass card (replaces hard white borders) */
+/* Glass card (replaces hard white borders) */
 .glass {
-  @apply bg-card/60 backdrop-blur border border-white/10;
+  @apply bg-card/60 backdrop-blur border border-border/30;
 }
 
 /* Gradient ring without harsh border */

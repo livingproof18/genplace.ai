@@ -13,7 +13,7 @@ export function HowItWorks() {
             <h2 className="text-2xl md:text-3xl font-semibold tracking-tight mb-6">How it works</h2>
             <div className="grid md:grid-cols-3 gap-4">
                 {steps.map(({ icon: Icon, title, desc }) => (
-                    <div key={title} className="p-5 rounded-2xl glass ring-gradient">
+                    <div key={title} className="p-5 rounded-2xl glass ring-gradient transition-shadow hover:shadow-glow focus-within:shadow-glow">
                         <div className="flex items-center gap-3 mb-2">
                             <div className="h-9 w-9 grid place-items-center rounded-lg bg-primary/15 border border-white/10">
                                 <Icon className="h-5 w-5 text-primary" />

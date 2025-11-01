@@ -211,6 +211,9 @@ export default function MapPage() {
         // close panel & clear selection (keep prompt for quick re-run)
         setPanelOpen(false);
         setSelectedId(null);
+
+        // cleanup ghost preview
+        window.dispatchEvent(new CustomEvent("genplace:preview:clear"));
     }
 
     return (
@@ -225,6 +228,8 @@ export default function MapPage() {
                 label={`Create ${tokens.current}/${tokens.max}`}
                 // <-- NEW: tell the map we're in generation mode when the panel is open
                 generationMode={panelOpen}
+                previewUrl={selectedId ? variants.find(v => v.id === selectedId)?.url || null : null}
+
             />
 
             {/* Show the main bottom "Create" button only when the composer is closed AND the generation panel is NOT open */}

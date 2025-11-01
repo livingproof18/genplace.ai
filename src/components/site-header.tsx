@@ -7,7 +7,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 
 export function SiteHeader() {
     return (
-        <header className="sticky top-0 z-40 w-full bg-background/50 backdrop-blur">
+        <header className="sticky top-0 z-40 w-full bg-transparent backdrop-blur-md">
             <div className="mx-auto max-w-7xl px-4 py-3 flex items-center justify-between">
                 <Link href="/" className="flex items-center gap-2">
                     <Image
