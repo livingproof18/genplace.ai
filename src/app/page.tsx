@@ -21,14 +21,13 @@ export default function Home() {
 
         <div className="relative mx-auto max-w-5xl px-4 py-20 md:py-28 flex flex-col items-start md:items-center">
           {/* Centered copy (mosaic hidden for MVP) */}
-          <div className="w-full md:w-[80%] lg:w-[60%] text-left md:text-center space-y-6">
-            <h1 className="text-4xl md:text-5xl font-semibold tracking-tight leading-tight">
-              GenPlace — where <span className="text-primary">prompts</span> become shared art
+          <div className="w-full md:w-[80%] lg:w-[60%] text-center md:text-center space-y-6">
+            <h1 className="text-4xl md:text-5xl font-semibold tracking-tight">
+              GenPlace: the place where <span className="text-primary">prompts</span> come alive
             </h1>
-
-            <p className="text-base md:text-lg text-muted-foreground max-w-prose mx-0 md:mx-auto">
-              Type a prompt, generate AI art, and place it onto a shared canvas. Collaborate,
-              explore, and watch the world evolve one tile at a time.
+            <p className="text-base md:text-lg text-muted-foreground max-w-prose">
+              Type a prompt, generate AI art, and place it onto a shared world.<br />
+              Watch the canvas evolve in real time.
             </p>
 
             <div className="pt-2 flex flex-col sm:flex-row sm:justify-center gap-3">
@@ -47,9 +46,9 @@ export default function Home() {
             </div>
 
             {/* Small supportive line */}
-            <div className="mt-4 text-sm text-muted-foreground md:mx-auto">
+            {/* <div className="mt-4 text-sm text-muted-foreground md:mx-auto">
               Free for experimentation — tokens limit generation rate for a playful shared experience.
-            </div>
+            </div> */}
           </div>
 
           {/* Right: animated mosaic — HIDDEN for MVP but kept in DOM */}

@@ -264,6 +264,8 @@ function makeMarkerElPin(color = "#3B82F6") {
     wrap.style.transformOrigin = "50% 100%";
     wrap.style.opacity = "0";
     wrap.style.transform = "scale(0.92)";
+    wrap.style.zIndex = "10";
+
 
     // SVG pin (27x41) — fill color = brand blue, subtle outer rim via opacity
     wrap.innerHTML = `
@@ -598,21 +600,65 @@ async function reverseGeocode(lat: number, lng: number, signal?: AbortSignal) {
     };
 }
 
-function makeGhostImageEl(url: string) {
+function makeGhostImageEl(url: string): HTMLDivElement {
+    // wrapper handed to MapLibre — let MapLibre position it (do not use position:absolute here)
+    const wrapper = document.createElement("div");
+    wrapper.setAttribute("aria-hidden", "true");
+
+    // give the wrapper a fixed size (marker positioning uses that box)
+    const sizePx = 128;
+    wrapper.style.width = `${sizePx}px`;
+    wrapper.style.height = `${sizePx}px`;
+    wrapper.style.display = "block";
+    wrapper.style.zIndex = "4"; // keep below pin (pin uses zIndex 5)
+    wrapper.style.pointerEvents = "none"; // avoid intercepting pointer events
+
+    // inner image — we style/animate this, not the wrapper
     const img = document.createElement("img");
     img.src = url;
     img.draggable = false;
+    img.alt = "Ghost preview";
+    img.className = "gp-ghost-img";
+
     Object.assign(img.style, {
-        width: "128px",
-        height: "128px",
+        display: "block",
+        width: "100%",
+        height: "100%",
         borderRadius: "12px",
-        opacity: "0.6",
         pointerEvents: "none",
-        transform: "translate(-50%, -50%)",
-        boxShadow: "0 0 10px rgba(0,0,0,0.25)",
-        transition: "opacity 0.25s ease",
+        transform: "scale(0.95)",
+        boxShadow: "0 0 12px rgba(0,0,0,0.25)",
+        transition: "transform 280ms cubic-bezier(0.22,1,0.36,1), opacity 0.25s ease, filter 160ms linear",
+        willChange: "transform, opacity, filter",
+        opacity: "0.75",
+        objectFit: "cover",
     });
-    return img;
+
+    // animate scale-in on next frame
+    requestAnimationFrame(() => {
+        img.style.transform = "scale(1)";
+    });
+
+    wrapper.appendChild(img);
+    return wrapper;
+}
+
+
+
+let __ghostCssInjected = false;
+function ensureGhostCss() {
+    if (__ghostCssInjected) return;
+    __ghostCssInjected = true;
+    const css = `
+  @keyframes gpGhostPulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 0.8; }
+  }
+  .gp-ghost-blur { filter: blur(3px) brightness(0.96); }
+  `;
+    const el = document.createElement("style");
+    el.textContent = css;
+    document.head.appendChild(el);
 }
 
 
@@ -651,7 +697,7 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
         generationModeRef.current = generationMode;
     }, [generationMode]);
     const ghostMarkerRef = useRef<any>(null);
-    const ghostElRef = useRef<HTMLImageElement | null>(null);
+    const ghostElRef = useRef<HTMLDivElement | null>(null);
 
 
     const [overlaysVisible, setOverlaysVisible] = useState(true);
@@ -1249,8 +1295,10 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     useEffect(() => {
         const map = mapRef.current;
         if (!map || !map.isStyleLoaded?.()) return;
+        ensureGhostCss();
+        console.log("[ghost-effect] previewUrl:", previewUrl, " checkpoint:", checkpoint, " mapReady:", !!map);
 
-        // cleanup existing ghost if previewUrl is gone
+        // remove if no preview
         if (!previewUrl) {
             if (ghostMarkerRef.current) {
                 ghostMarkerRef.current.remove();
@@ -1260,36 +1308,59 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
             return;
         }
 
-        // if no checkpoint yet, don't show ghost
         if (!checkpoint) return;
 
+        let mounted = true;
         (async () => {
             const gl = (await import("maplibre-gl")).default;
 
-            // if marker doesn't exist yet, create it
             if (!ghostMarkerRef.current) {
-                const el = makeGhostImageEl(previewUrl);
-                ghostElRef.current = el;
-                ghostMarkerRef.current = new gl.Marker({ element: el, anchor: "center" })
+                const wrapper = makeGhostImageEl(previewUrl);
+                ghostElRef.current = wrapper;
+                ghostMarkerRef.current = new gl.Marker({ element: wrapper, anchor: "center" })
                     .setLngLat([checkpoint.lng, checkpoint.lat])
                     .addTo(map);
             } else {
-                // update image URL if variant changed
-                const el = ghostElRef.current!;
-                if (el.src !== previewUrl) el.src = previewUrl;
-                ghostMarkerRef.current.setLngLat([checkpoint.lng, checkpoint.lat]);
+                const wrapper = ghostElRef.current!;
+                const img = wrapper.querySelector("img") as HTMLImageElement | null;
+                if (img && img.src !== previewUrl) img.src = previewUrl;
+                // ensure marker position is updated
+                try {
+                    ghostMarkerRef.current.setLngLat([checkpoint.lng, checkpoint.lat]);
+                } catch (e) {
+                    // defensive: if the marker was removed concurrently, ignore
+                }
             }
         })();
 
-        // cleanup when component unmounts
+        // blur toggle (targets the inner <img>)
+        const onMoveStart = () => {
+            const wrapper = ghostElRef.current;
+            const img = wrapper?.querySelector("img") as HTMLImageElement | null;
+            if (img) img.classList.add("gp-ghost-blur");
+        };
+        const onMoveEnd = () => {
+            const wrapper = ghostElRef.current;
+            const img = wrapper?.querySelector("img") as HTMLImageElement | null;
+            if (img) img.classList.remove("gp-ghost-blur");
+        };
+
+        map.on("movestart", onMoveStart);
+        map.on("moveend", onMoveEnd);
+
         return () => {
+            map.off("movestart", onMoveStart);
+            map.off("moveend", onMoveEnd);
             if (ghostMarkerRef.current) {
                 ghostMarkerRef.current.remove();
                 ghostMarkerRef.current = null;
                 ghostElRef.current = null;
             }
+            mounted = false;
         };
     }, [previewUrl, checkpoint]);
+
+
 
 
 
