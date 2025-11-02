@@ -13,7 +13,7 @@ export default function Home() {
       <SiteHeader />
 
       {/* HERO */}
-      <section className="relative overflow-hidden">
+      <section className="relative overflow-hidden md:h-[580px]">
         {/* Cinematic backdrop */}
         <div className="absolute inset-0 bg-gradient-to-b from-primary/10 via-background/40 to-background" />
         <div className="absolute inset-0 bg-noise opacity-70" />
@@ -59,7 +59,7 @@ export default function Home() {
       </section>
 
       {/* Live activity (hidden for MVP) */}
-      <section className="py-8 md:py-12">
+      <section className="py-8 md:py-12 hidden">
         <div className="mx-auto max-w-7xl px-4">
           <div className="hidden" aria-hidden>
             <LiveTicker />
@@ -68,7 +68,7 @@ export default function Home() {
       </section>
 
       {/* How it works */}
-      <section id="how-it-works" className="py-8 md:py-14">
+      <section id="how-it-works" className="mt-10 mb-8 md:mb-14">
         <HowItWorks />
       </section>
 

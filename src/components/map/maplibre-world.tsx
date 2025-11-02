@@ -408,27 +408,6 @@ function playPop(isMuted: boolean) {
     } catch { }
 }
 
-// Replace your snapToTile with this slippy-tile version (zInt = integer zoom)
-function snapToTile(lng: number, lat: number, z: number) {
-    // use the integer zoom level grid (tiles are defined per integer z)
-    const zInt = Math.floor(z + 1e-6);
-    const n = Math.pow(2, zInt);
-
-    // tile indices of the tile that CONTAINS the click
-    const xt = Math.floor(((lng + 180) / 360) * n);
-
-    const latRad = (lat * Math.PI) / 180;
-    const yt = Math.floor(
-        (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n
-    );
-
-    // center of that tile
-    const centerLng = (xt + 0.5) / n * 360 - 180;
-    const nY = Math.PI - (2 * Math.PI * (yt + 0.5)) / n;
-    const centerLat = (180 / Math.PI) * Math.atan(0.5 * (Math.exp(nY) - Math.exp(-nY)));
-
-    return { x: xt, y: yt, lng: centerLng, lat: centerLat, zoom: zInt };
-}
 
 // Source/layer ids for point placements
 const P_SRC = "gp_point_src";
@@ -461,6 +440,8 @@ function ensurePointLayer(map: any) {
                 "icon-anchor": ["get", "anchor"],       // per-feature anchor
                 "icon-size": ["get", "iconSize"],       // per-feature size scalar
             },
+            // optional safety: the layer won't render below this zoom level
+            minzoom: TILES_VISIBLE_ZOOM,
         });
     }
 }
@@ -701,6 +682,7 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
 
 
     const [overlaysVisible, setOverlaysVisible] = useState(true);
+    const overlaysVisibleRef = useRef(overlaysVisible);
 
     // --- hint: show when user is too zoomed out ---
     const [showZoomHint, setShowZoomHint] = useState(false);
@@ -729,35 +711,6 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     // near other refs at top of component
     const geocodeAbortRef = useRef<AbortController | null>(null);
     const selectionSeqRef = useRef(0); // increases each click; latest wins
-
-
-    // share handler
-    // share handler -> returns share url + optional snapshot blob
-    // Helper: wait for map to be idle (or timeout)
-    function waitForMapIdle(map: any, timeout = 1200): Promise<void> {
-        return new Promise((resolve) => {
-            if (!map) return resolve();
-            let done = false;
-            const onIdle = () => {
-                if (done) return;
-                done = true;
-                try { map.off("idle", onIdle); } catch { }
-                resolve();
-            };
-            try {
-                map.once("idle", onIdle);
-            } catch {
-                // if once fails, just resolve after timeout
-            }
-            // safety timeout
-            setTimeout(() => {
-                if (done) return;
-                done = true;
-                try { map.off("idle", onIdle); } catch { }
-                resolve();
-            }, timeout);
-        });
-    }
 
 
 
@@ -1031,17 +984,48 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                 } catch { }
 
                 // ----- low-zoom visibility gate for gp_* overlays -----
+                // inside map.on("load", ...)
                 const syncOverlayVisibilityForZoom = () => {
                     const z = map.getZoom();
                     const allowedByZoom = z >= TILES_VISIBLE_ZOOM;
+                    const shouldShow = overlaysVisibleRef.current && allowedByZoom;
+
+                    // gp_* raster overlays you've been toggling already
                     for (const id of currentIdsRef.current) {
                         const layerId = `${id}_layer`;
                         if (map.getLayer(layerId)) {
-                            const shouldShow = overlaysVisible && allowedByZoom;
-                            map.setPaintProperty(layerId, "raster-opacity", shouldShow ? 1 : 0);
+                            try { map.setPaintProperty(layerId, "raster-opacity", shouldShow ? 1 : 0); } catch { }
                         }
                     }
+
+                    // 1) Symbol layer for point placements
+                    try {
+                        if (map.getLayer(P_LAYER)) {
+                            // prefer explicit layout toggling (more robust than only relying on minzoom)
+                            map.setLayoutProperty(P_LAYER, "visibility", shouldShow ? "visible" : "none");
+                            // also toggle paint opacity if you prefer fade rather than instant hide
+                            // map.setPaintProperty(P_LAYER, "icon-opacity", shouldShow ? 1 : 0);
+                        }
+                    } catch (err) {
+                        // defensive: ignore map errors during style swaps
+                    }
+
+                    // 2) DOM ghost preview (Marker) — hide its element if zoomed out
+                    try {
+                        const wrapper = ghostElRef.current;
+                        if (wrapper) {
+                            // when zoomed out, hide the element (don't remove it so we can restore quickly)
+                            wrapper.style.display = shouldShow ? "block" : "none";
+                        }
+                        // Also ensure the real map marker (pin) remains visible even when overlays hidden.
+                        // If you want pin hidden too at very low zoom, you can toggle markerRef here similarly.
+                    } catch (err) { /* ignore */ }
                 };
+
+                syncOverlayVisibilityForZoom();
+                map.on("zoom", syncOverlayVisibilityForZoom);
+                map.on("zoomend", syncOverlayVisibilityForZoom);
+
 
                 // Sync overlay visibility on zoom
                 // --- top-center hint sync (run after map exists) ---
@@ -1057,14 +1041,14 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                 // update on zoom (and hide on moveend if you prefer)
                 map.on("zoom", syncHint);
 
-                // ensure we remove the listener when the map is removed
+                // single cleanup for remove
                 map.once("remove", () => {
-                    try { map.off("zoom", syncHint); } catch { }
+                    try {
+                        map.off("zoom", syncHint);
+                        map.off("zoom", syncOverlayVisibilityForZoom);
+                        map.off("zoomend", syncOverlayVisibilityForZoom);
+                    } catch { /* ignore */ }
                 });
-
-
-
-                map.on("zoomend", syncOverlayVisibilityForZoom);
 
                 // ----- pointer handlers for click vs drag -----
                 map.on("mousedown", (e: any) => {
@@ -1390,10 +1374,11 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
 
 
 
-
-
     // Toggle visibility across our tracked overlay tiles only (no layer scan)
     useEffect(() => {
+        overlaysVisibleRef.current = overlaysVisible;
+
+        // keep P_LAYER visibility in sync immediately when state toggles
         const map = mapRef.current;
         if (!map || !map.isStyleLoaded?.()) return;
         if (map.getLayer(P_LAYER)) {
