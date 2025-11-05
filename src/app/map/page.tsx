@@ -98,13 +98,16 @@ export default function MapPage() {
         for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
         return h;
     }
-    const fakeImagesFor = (p: string): Variant[] => {
+    const fakeImagesFor = (p: string, s: Size): Variant[] => {
         const seed = Math.abs(hash(p));
+        const dim = s ?? 256;
+        console.log(`https://picsum.photos/seed/${seed}/${dim}/${dim}`)
         return [
-            { id: `A_${seed}`, url: `https://picsum.photos/seed/${seed}/512/512` },
-            { id: `B_${seed + 1}`, url: `https://picsum.photos/seed/${seed + 1}/512/512` },
+            { id: `A_${seed}`, url: `https://picsum.photos/seed/${seed}/${dim}/${dim}` },
+            { id: `B_${seed + 1}`, url: `https://picsum.photos/seed/${seed + 1}/${dim}/${dim}` },
         ];
     };
+
     const GEN_RATE_MS = 10_000;
 
     async function doGenerate() {
@@ -118,7 +121,7 @@ export default function MapPage() {
 
         // simulate latency
         await new Promise((r) => setTimeout(r, 900 + Math.random() * 900));
-        return fakeImagesFor(prompt.trim() || "default");
+        return fakeImagesFor(prompt.trim() || "default", size);
     }
 
     async function regenerateOne(slot: 0 | 1) {
@@ -126,7 +129,8 @@ export default function MapPage() {
         setGenerating(true);
         try {
             await new Promise((r) => setTimeout(r, 700 + Math.random() * 600));
-            const alt = `https://picsum.photos/seed/${Math.floor(Math.random() * 10_000)}/512/512`;
+            const dim = size ?? 256;
+            const alt = `https://picsum.photos/seed/${Math.floor(Math.random() * 10_000)}/${dim}/${dim}`;
             setVariants((prev) => {
                 const next = [...prev];
                 if (next[slot]) next[slot] = { ...next[slot], id: crypto.randomUUID(), url: alt };

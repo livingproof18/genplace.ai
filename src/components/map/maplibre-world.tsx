@@ -416,87 +416,169 @@ const P_LAYER = "gp_point_layer";
 // Image cache: keep track of which icon names we’ve added
 const addedImages = new Set<string>();
 
-// Create (or update) one GeoJSON source that holds all point placements
-function ensurePointSource(map: any) {
-    if (!map.getSource(P_SRC)) {
-        map.addSource(P_SRC, {
-            type: "geojson",
-            data: { type: "FeatureCollection", features: [] },
-        });
-    }
+// // Create (or update) one GeoJSON source that holds all point placements
+// function ensurePointSource(map: any) {
+//     if (!map.getSource(P_SRC)) {
+//         map.addSource(P_SRC, {
+//             type: "geojson",
+//             data: { type: "FeatureCollection", features: [] },
+//         });
+//     }
+// }
+
+// // Create one symbol layer that renders icons from the point source
+// function ensurePointLayer(map: any) {
+//     if (!map.getLayer(P_LAYER)) {
+//         map.addLayer({
+//             id: P_LAYER,
+//             type: "symbol",
+//             source: P_SRC,
+//             layout: {
+//                 "icon-image": ["get", "icon"],          // per-feature icon name
+//                 "icon-allow-overlap": true,
+//                 "icon-ignore-placement": true,
+//                 "icon-anchor": ["get", "anchor"],       // per-feature anchor
+//                 "icon-size": ["get", "iconSize"],       // per-feature size scalar
+//             },
+//             // optional safety: the layer won't render below this zoom level
+//             minzoom: TILES_VISIBLE_ZOOM,
+//         });
+//     }
+// }
+
+
+// // Load an external image into the style sprite under a unique name
+// async function addIconToStyle(map: any, name: string, url: string) {
+//     if (addedImages.has(name)) return;
+//     const img = await (await fetch(url, { cache: "force-cache" })).blob();
+//     const bmp = await createImageBitmap(img);
+//     if (!map.hasImage(name)) {
+//         map.addImage(name, bmp, { pixelRatio: 1 });
+//     }
+//     addedImages.add(name);
+// }
+
+// async function syncPointPlacements(
+//     map: any,
+//     placements: PointPlacement[],
+//     defaultPixelSize: number
+// ) {
+//     ensurePointSource(map);
+//     ensurePointLayer(map);
+
+//     // 1) Make sure all icon images are available in the style
+//     // Use a unique sprite name per placement (e.g., its id)
+//     for (const p of placements) {
+//         const iconName = `gp_icon_${p.id}`;
+//         await addIconToStyle(map, iconName, p.url);
+//     }
+
+//     // 2) Build the feature collection
+//     const features = placements.map((p) => {
+//         const iconName = `gp_icon_${p.id}`;
+//         const px = p.pixelSize ?? defaultPixelSize;
+
+//         // Mapbox GL's symbol "icon-size" is a scalar relative to the source image's pixel size at 1x.
+//         // If you want the image to render at its native pixel size, use 1. To scale, change this.
+//         // const sizeScalar = px / 256;
+//         const sizeScalar = 1;
+
+//         return {
+//             type: "Feature",
+//             geometry: { type: "Point", coordinates: [p.lng, p.lat] },
+//             properties: {
+//                 icon: iconName,
+//                 anchor: p.anchor ?? "bottom",
+//                 iconSize: sizeScalar,
+//                 // you can keep any additional metadata here as needed
+//             },
+//         };
+//     });
+
+//     const src = map.getSource(P_SRC) as any;
+//     src.setData({ type: "FeatureCollection", features });
+// }
+
+// ===========================================================
+// 🧩 WORLD-ANCHORED IMAGE HELPERS (replaces symbol layer logic)
+// ===========================================================
+
+/**
+ * Compute geographic bounds for a square image centered at [lng, lat].
+ * The image is pixelSize×pixelSize in the "global pixel" grid at CANVAS_PIXEL_Z.
+ */
+function imageBoundsForCenter(map: any, lng: number, lat: number, pixelSize = 256, gridZoom = CANVAS_PIXEL_Z) {
+    const p = map.project([lng, lat], gridZoom);
+    const half = pixelSize / 2;
+    const nw = map.unproject({ x: p.x - half, y: p.y - half }, gridZoom);
+    const se = map.unproject({ x: p.x + half, y: p.y + half }, gridZoom);
+    // MapLibre expects coordinates in [top-left, top-right, bottom-right, bottom-left]
+    return [
+        [nw.lng, nw.lat],
+        [se.lng, nw.lat],
+        [se.lng, se.lat],
+        [nw.lng, se.lat],
+    ];
 }
 
-// Create one symbol layer that renders icons from the point source
-function ensurePointLayer(map: any) {
-    if (!map.getLayer(P_LAYER)) {
-        map.addLayer({
-            id: P_LAYER,
-            type: "symbol",
-            source: P_SRC,
-            layout: {
-                "icon-image": ["get", "icon"],          // per-feature icon name
-                "icon-allow-overlap": true,
-                "icon-ignore-placement": true,
-                "icon-anchor": ["get", "anchor"],       // per-feature anchor
-                "icon-size": ["get", "iconSize"],       // per-feature size scalar
-            },
-            // optional safety: the layer won't render below this zoom level
-            minzoom: TILES_VISIBLE_ZOOM,
-        });
-    }
-}
+/**
+ * Add or update an image layer anchored to the map’s world coordinates.
+ * This makes the image scale naturally with zoom (like tiles or terrain).
+ */
+async function addWorldImage(map: any, id: string, url: string, lng: number, lat: number, pixelSize = 256) {
+    const coords = imageBoundsForCenter(map, lng, lat, pixelSize);
 
+    // Remove old layers/sources if they exist
+    if (map.getLayer(id)) map.removeLayer(id);
+    if (map.getSource(id)) map.removeSource(id);
 
-// Load an external image into the style sprite under a unique name
-async function addIconToStyle(map: any, name: string, url: string) {
-    if (addedImages.has(name)) return;
-    const img = await (await fetch(url, { cache: "force-cache" })).blob();
-    const bmp = await createImageBitmap(img);
-    if (!map.hasImage(name)) {
-        map.addImage(name, bmp, { pixelRatio: 1 });
-    }
-    addedImages.add(name);
-}
-
-async function syncPointPlacements(
-    map: any,
-    placements: PointPlacement[],
-    defaultPixelSize: number
-) {
-    ensurePointSource(map);
-    ensurePointLayer(map);
-
-    // 1) Make sure all icon images are available in the style
-    // Use a unique sprite name per placement (e.g., its id)
-    for (const p of placements) {
-        const iconName = `gp_icon_${p.id}`;
-        await addIconToStyle(map, iconName, p.url);
-    }
-
-    // 2) Build the feature collection
-    const features = placements.map((p) => {
-        const iconName = `gp_icon_${p.id}`;
-        const px = p.pixelSize ?? defaultPixelSize;
-
-        // Mapbox GL's symbol "icon-size" is a scalar relative to the source image's pixel size at 1x.
-        // If you want the image to render at its native pixel size, use 1. To scale, change this.
-        const sizeScalar = 1;
-
-        return {
-            type: "Feature",
-            geometry: { type: "Point", coordinates: [p.lng, p.lat] },
-            properties: {
-                icon: iconName,
-                anchor: p.anchor ?? "bottom",
-                iconSize: sizeScalar,
-                // you can keep any additional metadata here as needed
-            },
-        };
+    map.addSource(id, {
+        type: "image",
+        url,
+        coordinates: coords,
     });
 
-    const src = map.getSource(P_SRC) as any;
-    src.setData({ type: "FeatureCollection", features });
+    map.addLayer({
+        id,
+        type: "raster",
+        source: id,
+        paint: { "raster-opacity": 1 },
+    });
 }
+
+/**
+ * syncWorldPlacements:
+ * Adds each image as a "stitched" world-anchored raster layer.
+ */
+async function syncWorldPlacements(map: any, placements: PointPlacement[], defaultPixelSize: number) {
+    if (!map || !map.isStyleLoaded?.()) return;
+
+    // Keep track of existing IDs to remove stale ones
+    const existing = new Set(
+        (map.getStyle()?.layers || [])
+            .map((l: any) => l.id)
+            .filter((id: string) => id.startsWith("gp_raster_"))
+    );
+
+    for (const p of placements) {
+        const id = `gp_raster_${p.id}`;
+        try {
+            await addWorldImage(map, id, p.url, p.lng, p.lat, p.pixelSize ?? defaultPixelSize);
+        } catch (err) {
+            console.warn("addWorldImage failed:", err);
+        }
+        existing.delete(id); // still used, don't remove
+    }
+
+    // Remove any old layers not in placements
+    for (const old of existing) {
+        try {
+            if (map.getLayer(old)) map.removeLayer(old);
+            if (map.getSource(old)) map.removeSource(old);
+        } catch { /* ignore */ }
+    }
+}
+
 
 // Build a flag emoji from ISO country code (e.g., "GB" → 🇬🇧).
 // If the runtime cannot render an emoji (very rare), this returns undefined.
@@ -581,13 +663,13 @@ async function reverseGeocode(lat: number, lng: number, signal?: AbortSignal) {
     };
 }
 
-function makeGhostImageEl(url: string): HTMLDivElement {
+function makeGhostImageEl(url: string, sizePx = 128): HTMLDivElement {
     // wrapper handed to MapLibre — let MapLibre position it (do not use position:absolute here)
     const wrapper = document.createElement("div");
     wrapper.setAttribute("aria-hidden", "true");
 
     // give the wrapper a fixed size (marker positioning uses that box)
-    const sizePx = 128;
+    // const sizePx = 128;
     wrapper.style.width = `${sizePx}px`;
     wrapper.style.height = `${sizePx}px`;
     wrapper.style.display = "block";
@@ -1260,7 +1342,7 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     // Sync placements → add/update/remove only what's necessary
     // Cache last placements signature to avoid doing work when nothing changed
 
-    // Sync placements → add/update/remove only what's necessary
+    // Render all point placements as stitched raster images
     useEffect(() => {
         const map = mapRef.current;
         if (!map || !map.isStyleLoaded?.()) return;
@@ -1268,9 +1350,9 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
         // Render all point placements as icons
         (async () => {
             try {
-                await syncPointPlacements(map, placements, sizePx /* default pixel size */);
+                await syncWorldPlacements(map, placements, sizePx);
             } catch (e) {
-                console.error("syncPointPlacements error", e);
+                console.error("syncWorldPlacements  error", e);
             }
         })();
     }, [placements, sizePx]);
@@ -1299,7 +1381,7 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
             const gl = (await import("maplibre-gl")).default;
 
             if (!ghostMarkerRef.current) {
-                const wrapper = makeGhostImageEl(previewUrl);
+                const wrapper = makeGhostImageEl(previewUrl, sizePx);
                 ghostElRef.current = wrapper;
                 ghostMarkerRef.current = new gl.Marker({ element: wrapper, anchor: "center" })
                     .setLngLat([checkpoint.lng, checkpoint.lat])
