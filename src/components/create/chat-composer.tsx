@@ -6,7 +6,7 @@ import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Rocket, ChevronDown, Sparkles, X, Coins } from "lucide-react";
+import { Rocket, ChevronDown, Sparkles, X, Coins, Aperture, Banana, Shield } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import type { TokensState } from "@/hooks/use-tokens";
@@ -27,6 +27,12 @@ const TIPS = [
     "A watercolor map of a fantasy archipelago",
     "Low-poly camper van parked under the stars",
 ];
+
+const MODEL_OPTIONS = [
+    { value: "openai", label: "gpt-image-1", provider: "OpenAI", Icon: Aperture },
+    { value: "google", label: "Nano Banana", provider: "Google Gemini", Icon: Banana },
+    { value: "sdxl", label: "Stable Image Core", provider: "Stability AI", Icon: Shield },
+] as const;
 
 export function ChatComposer({
     tokens,
@@ -257,12 +263,29 @@ export function ChatComposer({
                             <Select value={model} onValueChange={(v) => onModel(v as Model)}>
                                 <SelectTrigger
                                     className={cn(
-                                        "w-[190px] h-9 text-sm rounded-full border bg-secondary/50",
+                                        "w-[220px] h-11 text-sm rounded-full border bg-secondary/50",
                                         "border-border/50 hover:bg-secondary/70 transition-colors",
                                         "focus:outline-none focus:ring-2 focus:ring-primary cursor-pointer"
                                     )}
                                 >
-                                    <SelectValue placeholder="Select model" />
+                                    <SelectValue placeholder="Select model">
+                                        {(() => {
+                                            const opt = MODEL_OPTIONS.find((o) => o.value === model);
+                                            if (!opt) return null;
+                                            const Icon = opt.Icon;
+                                            return (
+                                                <span className="flex items-center gap-2">
+                                                    <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-background/60 border border-border/60">
+                                                        <Icon className="h-3.5 w-3.5" />
+                                                    </span>
+                                                    <span className="flex flex-col leading-tight">
+                                                        <span className="text-[13px] font-semibold">{opt.label}</span>
+                                                        <span className="text-[11px] text-muted-foreground">{opt.provider}</span>
+                                                    </span>
+                                                </span>
+                                            );
+                                        })()}
+                                    </SelectValue>
                                 </SelectTrigger>
 
                                 <SelectContent
@@ -271,12 +294,7 @@ export function ChatComposer({
                                         "animate-in fade-in slide-in-from-top-1 p-1 space-y-1"
                                     )}
                                 >
-                                    {[
-                                        { value: "genplace", label: "GenPlace (default)" },
-                                        { value: "openai", label: "OpenAI DALL·E" },
-                                        { value: "google", label: "Google Nano Banana" },
-                                        { value: "sdxl", label: "Stability Core" },
-                                    ].map((item) => (
+                                    {MODEL_OPTIONS.map((item) => (
                                         <SelectItem
                                             key={item.value}
                                             value={item.value}
@@ -286,7 +304,15 @@ export function ChatComposer({
                                                 "hover:bg-accent/40 hover:text-foreground focus:bg-accent/50"
                                             )}
                                         >
-                                            {item.label}
+                                            <span className="flex items-center gap-2">
+                                                <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-secondary/60 border border-border/60">
+                                                    <item.Icon className="h-3.5 w-3.5" />
+                                                </span>
+                                                <span className="flex flex-col leading-tight">
+                                                    <span className="text-[13px] font-semibold">{item.label}</span>
+                                                    <span className="text-[11px] text-muted-foreground">{item.provider}</span>
+                                                </span>
+                                            </span>
                                         </SelectItem>
                                     ))}
                                 </SelectContent>

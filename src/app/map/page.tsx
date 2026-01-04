@@ -30,7 +30,7 @@ export default function MapPage() {
     // creation state shared between composer & panel
     const [prompt, setPrompt] = useState("");
     const [size, setSize] = useState<Size>(256);
-    const [model, setModel] = useState<Model>("genplace");
+    const [model, setModel] = useState<Model>("openai");
     const [presetPoint, setPresetPoint] = useState<{ lat: number; lng: number } | null>(null);
 
     const [generating, setGenerating] = useState(false);

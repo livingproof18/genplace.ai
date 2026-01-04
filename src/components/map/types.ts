@@ -17,5 +17,5 @@ export type PointPlacement = {
     | "top-right";
 };
 
-export type Model = "genplace" | "openai" | "google" | "sdxl";
+export type Model = "openai" | "google" | "sdxl";
 export type Size = 128 | 256 | 512;
