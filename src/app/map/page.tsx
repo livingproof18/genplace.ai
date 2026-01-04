@@ -30,7 +30,7 @@ export default function MapPage() {
     // creation state shared between composer & panel
     const [prompt, setPrompt] = useState("");
     const [size, setSize] = useState<Size>(256);
-    const [model, setModel] = useState<Model>("genplace");
+    const [model, setModel] = useState<Model>("openai");
     const [presetPoint, setPresetPoint] = useState<{ lat: number; lng: number } | null>(null);
 
     const [generating, setGenerating] = useState(false);
@@ -92,23 +92,34 @@ export default function MapPage() {
     }, []);
 
 
-    // === fake services (reuse your previous logic) ===
-    function hash(s: string) {
-        let h = 0;
-        for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-        return h;
-    }
-    const fakeImagesFor = (p: string, s: Size): Variant[] => {
-        const seed = Math.abs(hash(p));
-        const dim = s ?? 256;
-        console.log(`https://picsum.photos/seed/${seed}/${dim}/${dim}`)
-        return [
-            { id: `A_${seed}`, url: `https://picsum.photos/seed/${seed}/${dim}/${dim}` },
-            { id: `B_${seed + 1}`, url: `https://picsum.photos/seed/${seed + 1}/${dim}/${dim}` },
-        ];
-    };
-
     const GEN_RATE_MS = 10_000;
+
+    async function requestImages(n: number) {
+        const provider =
+            model === "google"
+                ? "google"
+                : model === "sdxl"
+                    ? "stability"
+                    : "openai";
+        const res = await fetch("/api/generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                prompt: prompt.trim(),
+                size,
+                n,
+                provider,
+            }),
+        });
+
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data?.error || "Image generation failed.");
+        }
+
+        const data = (await res.json()) as { variants?: Variant[] };
+        return data.variants ?? [];
+    }
 
     async function doGenerate() {
         const now = Date.now();
@@ -119,23 +130,22 @@ export default function MapPage() {
         }
         lastGenAtRef.current = now;
 
-        // simulate latency
-        await new Promise((r) => setTimeout(r, 900 + Math.random() * 900));
-        return fakeImagesFor(prompt.trim() || "default", size);
+        return requestImages(2);
     }
 
     async function regenerateOne(slot: 0 | 1) {
         if (!panelOpen || generating) return;
         setGenerating(true);
         try {
-            await new Promise((r) => setTimeout(r, 700 + Math.random() * 600));
-            const dim = size ?? 256;
-            const alt = `https://picsum.photos/seed/${Math.floor(Math.random() * 10_000)}/${dim}/${dim}`;
-            setVariants((prev) => {
-                const next = [...prev];
-                if (next[slot]) next[slot] = { ...next[slot], id: crypto.randomUUID(), url: alt };
-                return next;
-            });
+            const imgs = await requestImages(1);
+            const nextImg = imgs[0];
+            if (nextImg) {
+                setVariants((prev) => {
+                    const next = [...prev];
+                    if (next[slot]) next[slot] = nextImg;
+                    return next;
+                });
+            }
         } finally {
             setGenerating(false);
         }

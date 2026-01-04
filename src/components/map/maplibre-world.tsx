@@ -64,13 +64,24 @@ function tileBounds(x: number, y: number, z: number) {
 // A *display-only* global pixel grid like wplace (huge resolution).
 // MapLibre's world size at zoom Z is 512 * 2^Z pixels.
 // Z=22 → 2,147,483,648 px per axis (~4.6e18 cells total) — plenty high.
+
+const WORLD_TILE_SIZE = 512;
 const CANVAS_PIXEL_Z = 22;
 
+function worldSizeForZoom(z: number) {
+    return WORLD_TILE_SIZE * Math.pow(2, z);
+}
+
 // lat/lng → global canvas pixel (integer) at CANVAS_PIXEL_Z
-function latLngToCanvasPixel(map: any, lng: number, lat: number) {
-    const p = map.project([lng, lat], CANVAS_PIXEL_Z);
-    // floor to get a single pixel cell id; no snapping of the marker!
-    return { x: Math.floor(p.x), y: Math.floor(p.y), gridZ: CANVAS_PIXEL_Z };
+function latLngToCanvasPixel(map: any, lng: number, lat: number, mercator: any) {
+    if (mercator?.fromLngLat) {
+        const worldSize = worldSizeForZoom(CANVAS_PIXEL_Z);
+        const m = mercator.fromLngLat({ lng, lat });
+        return { x: Math.floor(m.x * worldSize), y: Math.floor(m.y * worldSize), gridZ: CANVAS_PIXEL_Z };
+    }
+    // Fallback uses current zoom if MercatorCoordinate is not available.
+    const p = map.project([lng, lat]);
+    return { x: Math.floor(p.x), y: Math.floor(p.y), gridZ: map.getZoom?.() ?? 0 };
 }
 
 
@@ -315,6 +326,9 @@ function makeMarkerElPin(color = "#3B82F6") {
 
 const CLICK_TILE_SRC = "gp__click_tile_src";
 const CLICK_TILE_LAYER = "gp__click_tile_layer";
+const GRID_SRC = "gp__grid_src";
+const GRID_LAYER = "gp__grid_layer";
+const GRID_PX = 256;
 
 function geojsonForTile(x: number, y: number, zInt: number) {
     const b = tileBounds(x, y, zInt); // you already have tileBounds()
@@ -503,35 +517,124 @@ const addedImages = new Set<string>();
 // 🧩 WORLD-ANCHORED IMAGE HELPERS (replaces symbol layer logic)
 // ===========================================================
 
+// ===========================================================
+// 🌍 Correct world-anchored image placement (wplace-style)
+// ===========================================================
+
 /**
- * Compute geographic bounds for a square image centered at [lng, lat].
- * The image is pixelSize×pixelSize in the "global pixel" grid at CANVAS_PIXEL_Z.
+ * Fixed global zoom reference — defines your "canvas pixel grid".
+ * Each image’s pixelSize is measured in pixels at this zoom.
  */
-function imageBoundsForCenter(map: any, lng: number, lat: number, pixelSize = 256, gridZoom = CANVAS_PIXEL_Z) {
-    const p = map.project([lng, lat], gridZoom);
+// Use a reference zoom that matches the zoom where you expect the artwork to be visible.
+// If this is too high (e.g., 22), sizes like 128/256 become sub‑pixel at z~11.
+const CANVAS_ZOOM = MIN_INTERACT_ZOOM;
+
+/**
+ * Compute geographic bounds for a square image centered at [lng, lat],
+ * measured in pixels at the global CANVAS_ZOOM (not the map’s current zoom).
+ */
+function fixedWorldBounds(mercator: any, lng: number, lat: number, pixelSize = 256): [number, number][][] | null {
+    if (!mercator?.fromLngLat) return null;
+    const worldSize = worldSizeForZoom(CANVAS_ZOOM);
+    const m = mercator.fromLngLat({ lng, lat });
     const half = pixelSize / 2;
-    const nw = map.unproject({ x: p.x - half, y: p.y - half }, gridZoom);
-    const se = map.unproject({ x: p.x + half, y: p.y + half }, gridZoom);
-    // MapLibre expects coordinates in [top-left, top-right, bottom-right, bottom-left]
-    return [
-        [nw.lng, nw.lat],
-        [se.lng, nw.lat],
-        [se.lng, se.lat],
-        [nw.lng, se.lat],
-    ];
+    const halfInMerc = half / worldSize;
+    const nw = new mercator(m.x - halfInMerc, m.y - halfInMerc, 0).toLngLat();
+    const ne = new mercator(m.x + halfInMerc, m.y - halfInMerc, 0).toLngLat();
+    const se = new mercator(m.x + halfInMerc, m.y + halfInMerc, 0).toLngLat();
+    const sw = new mercator(m.x - halfInMerc, m.y + halfInMerc, 0).toLngLat();
+    return [[nw.lng, nw.lat], [ne.lng, ne.lat], [se.lng, se.lat], [sw.lng, sw.lat]];
+}
+
+function buildGridGeoJSON(map: any, mercator: any, gridPx: number, zoomRef: number) {
+    if (!mercator?.fromLngLat) {
+        return { type: "FeatureCollection", features: [] };
+    }
+    const bounds = map.getBounds?.();
+    if (!bounds) {
+        return { type: "FeatureCollection", features: [] };
+    }
+
+    const ne = mercator.fromLngLat({ lng: bounds.getEast(), lat: bounds.getNorth() });
+    const sw = mercator.fromLngLat({ lng: bounds.getWest(), lat: bounds.getSouth() });
+
+    const minX = Math.min(sw.x, ne.x);
+    const maxX = Math.max(sw.x, ne.x);
+    const minY = Math.min(sw.y, ne.y);
+    const maxY = Math.max(sw.y, ne.y);
+
+    const worldSize = worldSizeForZoom(zoomRef);
+    const step = gridPx / worldSize;
+    if (!Number.isFinite(step) || step <= 0) {
+        return { type: "FeatureCollection", features: [] };
+    }
+
+    const features: any[] = [];
+    const maxLines = 800;
+    let lineCount = 0;
+
+    const startX = Math.floor(minX / step) * step;
+    const endX = Math.ceil(maxX / step) * step;
+    for (let x = startX; x <= endX; x += step) {
+        if (lineCount >= maxLines) break;
+        const a = new mercator(x, minY, 0).toLngLat();
+        const b = new mercator(x, maxY, 0).toLngLat();
+        features.push({
+            type: "Feature",
+            geometry: { type: "LineString", coordinates: [[a.lng, a.lat], [b.lng, b.lat]] },
+            properties: {},
+        });
+        lineCount += 1;
+    }
+
+    const startY = Math.floor(minY / step) * step;
+    const endY = Math.ceil(maxY / step) * step;
+    for (let y = startY; y <= endY; y += step) {
+        if (lineCount >= maxLines) break;
+        const a = new mercator(minX, y, 0).toLngLat();
+        const b = new mercator(maxX, y, 0).toLngLat();
+        features.push({
+            type: "Feature",
+            geometry: { type: "LineString", coordinates: [[a.lng, a.lat], [b.lng, b.lat]] },
+            properties: {},
+        });
+        lineCount += 1;
+    }
+
+    return { type: "FeatureCollection", features };
 }
 
 /**
- * Add or update an image layer anchored to the map’s world coordinates.
- * This makes the image scale naturally with zoom (like tiles or terrain).
+ * Add or update a persistent raster image layer that scales
+ * perfectly with zoom — like wplace.
  */
-async function addWorldImage(map: any, id: string, url: string, lng: number, lat: number, pixelSize = 256) {
-    const coords = imageBoundsForCenter(map, lng, lat, pixelSize);
+function ensureWorldImage(
+    map: any,
+    id: string,
+    url: string,
+    lng: number,
+    lat: number,
+    pixelSize = 256,
+    mercator?: any
+) {
+    const coords = fixedWorldBounds(mercator, lng, lat, pixelSize);
+    if (!coords) return;
 
-    // Remove old layers/sources if they exist
-    if (map.getLayer(id)) map.removeLayer(id);
-    if (map.getSource(id)) map.removeSource(id);
+    // Update if exists
+    if (map.getSource(id)) {
+        const src: any = map.getSource(id);
+        if (typeof src.updateImage === "function") {
+            src.updateImage({ url, coordinates: coords });
+            return;
+        }
+        // Fallback: remove and re-add if updateImage is not supported.
+        try {
+            if (map.getLayer(id)) map.removeLayer(id);
+            if (map.getSource(id)) map.removeSource(id);
+        } catch { }
+    }
 
+    // Create new source + layer
     map.addSource(id, {
         type: "image",
         url,
@@ -542,40 +645,36 @@ async function addWorldImage(map: any, id: string, url: string, lng: number, lat
         id,
         type: "raster",
         source: id,
+        minzoom: TILES_VISIBLE_ZOOM,
         paint: { "raster-opacity": 1 },
     });
 }
 
 /**
- * syncWorldPlacements:
- * Adds each image as a "stitched" world-anchored raster layer.
+ * Keep all placements synchronized and stable across re-renders.
  */
-async function syncWorldPlacements(map: any, placements: PointPlacement[], defaultPixelSize: number) {
-    if (!map || !map.isStyleLoaded?.()) return;
-
-    // Keep track of existing IDs to remove stale ones
-    const existing = new Set(
-        (map.getStyle()?.layers || [])
-            .map((l: any) => l.id)
-            .filter((id: string) => id.startsWith("gp_raster_"))
-    );
+function syncWorldPlacements(map: any, placements: PointPlacement[], defaultPixelSize: number, mercator?: any) {
+    if (!map || !map.isStyleLoaded?.() || !mercator?.fromLngLat) return;
+    const seen = new Set<string>();
 
     for (const p of placements) {
         const id = `gp_raster_${p.id}`;
-        try {
-            await addWorldImage(map, id, p.url, p.lng, p.lat, p.pixelSize ?? defaultPixelSize);
-        } catch (err) {
-            console.warn("addWorldImage failed:", err);
-        }
-        existing.delete(id); // still used, don't remove
+        ensureWorldImage(map, id, p.url, p.lng, p.lat, p.pixelSize ?? defaultPixelSize, mercator);
+        seen.add(id);
     }
 
-    // Remove any old layers not in placements
-    for (const old of existing) {
-        try {
-            if (map.getLayer(old)) map.removeLayer(old);
-            if (map.getSource(old)) map.removeSource(old);
-        } catch { /* ignore */ }
+    // Remove any stale layers/sources
+    const style = map.getStyle();
+    if (!style) return;
+
+    for (const layer of style.layers || []) {
+        const id = layer.id;
+        if (id.startsWith("gp_raster_") && !seen.has(id)) {
+            try {
+                if (map.getLayer(id)) map.removeLayer(id);
+                if (map.getSource(id)) map.removeSource(id);
+            } catch { /* ignore cleanup errors */ }
+        }
     }
 }
 
@@ -753,18 +852,27 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
 }: Props) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<any>(null);
+    const mercatorRef = useRef<any>(null);
     const center = useMemo<[number, number]>(() => [0, 20], []);
+    const placementsRef = useRef<PointPlacement[]>(placements);
+    const sizePxRef = useRef(sizePx);
     // keep a ref that always contains the latest generationMode
     const generationModeRef = useRef<boolean | undefined>(generationMode);
     useEffect(() => {
         generationModeRef.current = generationMode;
     }, [generationMode]);
+    useEffect(() => {
+        placementsRef.current = placements;
+        sizePxRef.current = sizePx;
+    }, [placements, sizePx]);
+
     const ghostMarkerRef = useRef<any>(null);
     const ghostElRef = useRef<HTMLDivElement | null>(null);
 
 
     const [overlaysVisible, setOverlaysVisible] = useState(true);
     const overlaysVisibleRef = useRef(overlaysVisible);
+    const [gridVisible, setGridVisible] = useState(false);
 
     // --- hint: show when user is too zoomed out ---
     const [showZoomHint, setShowZoomHint] = useState(false);
@@ -793,6 +901,81 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     // near other refs at top of component
     const geocodeAbortRef = useRef<AbortController | null>(null);
     const selectionSeqRef = useRef(0); // increases each click; latest wins
+
+    useEffect(() => {
+        const map = mapRef.current;
+        const mercator = mercatorRef.current;
+        if (!map || !mercator) return;
+
+        const ensureGridLayer = () => {
+            if (!map.getSource(GRID_SRC)) {
+                map.addSource(GRID_SRC, {
+                    type: "geojson",
+                    data: { type: "FeatureCollection", features: [] },
+                });
+            }
+            if (!map.getLayer(GRID_LAYER)) {
+                map.addLayer({
+                    id: GRID_LAYER,
+                    type: "line",
+                    source: GRID_SRC,
+                    layout: { "line-cap": "butt", "line-join": "miter" },
+                    paint: {
+                        "line-color": "#1D4ED8",
+                        "line-width": 1.5,
+                        "line-opacity": 0.6,
+                        "line-dasharray": [2, 1],
+                    },
+                });
+            }
+        };
+
+        const updateGrid = () => {
+            if (!gridVisible) return;
+            if (map.getZoom?.() < MIN_INTERACT_ZOOM) {
+                const src = map.getSource(GRID_SRC) as any;
+                if (src?.setData) src.setData({ type: "FeatureCollection", features: [] });
+                return;
+            }
+            const src = map.getSource(GRID_SRC) as any;
+            if (src?.setData) {
+                src.setData(buildGridGeoJSON(map, mercator, GRID_PX, CANVAS_ZOOM));
+            }
+        };
+
+        const attach = () => {
+            ensureGridLayer();
+            updateGrid();
+            if (map.getLayer(GRID_LAYER)) {
+                map.setLayoutProperty(GRID_LAYER, "visibility", gridVisible ? "visible" : "none");
+            }
+        };
+
+        if (map.isStyleLoaded?.()) {
+            attach();
+        } else {
+            map.once("load", attach);
+        }
+
+        const onStyle = () => attach();
+        map.on("style.load", onStyle);
+
+        if (gridVisible) {
+            map.on("moveend", updateGrid);
+            map.on("zoomend", updateGrid);
+            map.on("resize", updateGrid);
+        }
+
+        return () => {
+            try {
+                map.off("style.load", onStyle);
+                map.off("moveend", updateGrid);
+                map.off("zoomend", updateGrid);
+                map.off("resize", updateGrid);
+                map.off("load", attach);
+            } catch { }
+        };
+    }, [gridVisible]);
 
 
 
@@ -1034,6 +1217,7 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
             const lib = await import("maplibre-gl");
             if (destroyed) return;
             const maplibregl = (lib as any).default ?? lib;
+            mercatorRef.current = maplibregl.MercatorCoordinate;
             const map = new maplibregl.Map({
                 container: containerRef.current!,
                 style: STYLE_URL,
@@ -1051,6 +1235,19 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                 map.getCanvas().style.cursor = "grab";
                 map.doubleClickZoom?.disable();
                 const maplibregl = (lib as any).default ?? lib;
+
+                const syncWorldPlacementsNow = () => {
+                    try {
+                        syncWorldPlacements(map, placementsRef.current, sizePxRef.current, mercatorRef.current);
+                    } catch (e) {
+                        console.error("syncWorldPlacements  error", e);
+                    }
+                };
+                syncWorldPlacementsNow();
+                map.on("style.load", syncWorldPlacementsNow);
+                map.once("remove", () => {
+                    try { map.off("style.load", syncWorldPlacementsNow); } catch { }
+                });
 
                 // Deep link: ?lat=&lng=&zoom=
                 try {
@@ -1091,6 +1288,17 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                     } catch (err) {
                         // defensive: ignore map errors during style swaps
                     }
+
+                    // 2) Raster image placements
+                    try {
+                        const layers = map.getStyle?.().layers || [];
+                        for (const layer of layers) {
+                            if (!layer?.id?.startsWith("gp_raster_")) continue;
+                            if (map.getLayer(layer.id)) {
+                                map.setLayoutProperty(layer.id, "visibility", shouldShow ? "visible" : "none");
+                            }
+                        }
+                    } catch { }
 
                     // 2) DOM ghost preview (Marker) — hide its element if zoomed out
                     try {
@@ -1185,7 +1393,7 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                     playPop(isMuted);
 
                     // 4) Compute *display-only* canvas pixel (no effect on pin)
-                    const px = latLngToCanvasPixel(map, clickLng, clickLat); // {x,y,gridZ}
+                    const px = latLngToCanvasPixel(map, clickLng, clickLat, mercatorRef.current); // {x,y,gridZ}
 
                     // 5) Build initial modal meta; enrich with reverse geocode
                     let meta: TileMeta = {
@@ -1298,9 +1506,8 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
         if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return;
 
         // derive lat/lng for tile center at z
-        const worldPxX = (x + 0.5) * TILE_SIZE;
-        const worldPxY = (y + 0.5) * TILE_SIZE;
-        const { lng, lat } = map.unproject({ x: worldPxX, y: worldPxY }, z);
+        const lng = tile2lon(x + 0.5, z);
+        const lat = tile2lat(y + 0.5, z);
         if (z >= MIN_INTERACT_ZOOM) {
             // place marker & center
             setTimeout(() => {
@@ -1345,16 +1552,26 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     // Render all point placements as stitched raster images
     useEffect(() => {
         const map = mapRef.current;
-        if (!map || !map.isStyleLoaded?.()) return;
+        if (!map) return;
 
-        // Render all point placements as icons
-        (async () => {
+        const run = () => {
+            if (!map.isStyleLoaded?.()) return;
             try {
-                await syncWorldPlacements(map, placements, sizePx);
+                syncWorldPlacements(map, placements, sizePx, mercatorRef.current);
             } catch (e) {
                 console.error("syncWorldPlacements  error", e);
             }
-        })();
+        };
+
+        if (map.isStyleLoaded?.()) {
+            run();
+            return;
+        }
+
+        map.once("load", run);
+        return () => {
+            try { map.off("load", run); } catch { }
+        };
     }, [placements, sizePx]);
 
     // --- ghost preview handler ---
@@ -1466,6 +1683,15 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
         if (map.getLayer(P_LAYER)) {
             map.setLayoutProperty(P_LAYER, "visibility", overlaysVisible ? "visible" : "none");
         }
+        try {
+            const layers = map.getStyle?.().layers || [];
+            for (const layer of layers) {
+                if (!layer?.id?.startsWith("gp_raster_")) continue;
+                if (map.getLayer(layer.id)) {
+                    map.setLayoutProperty(layer.id, "visibility", overlaysVisible ? "visible" : "none");
+                }
+            }
+        } catch { }
     }, [overlaysVisible]);
 
     // Render top-center hint into document.body so it cannot be occluded by map stacking contexts
@@ -1520,6 +1746,7 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     const zoomIn = () => mapRef.current?.zoomIn({ duration: 200 });
     const zoomOut = () => mapRef.current?.zoomOut({ duration: 200 });
     const toggleOverlays = () => setOverlaysVisible((v) => !v);
+    const toggleGrid = () => setGridVisible((v) => !v);
     const showHelp = () => {
         window.alert("Pan/zoom the map. Click an empty tile to place. Toggle overlay to show/hide artwork.");
     };
@@ -1640,6 +1867,8 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                 onShare={openSocial}
                 overlaysVisible={overlaysVisible}
                 onToggleOverlays={toggleOverlays}
+                gridVisible={gridVisible}
+                onToggleGrid={toggleGrid}
             />
 
             {/* Top-right controls (column) */}
