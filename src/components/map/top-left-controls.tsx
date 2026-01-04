@@ -1,7 +1,7 @@
 // src/components/map/top-left-controls.tsx
 "use client";
 
-import { HelpCircle, Plus, Minus, Share2, Eye, EyeOff } from "lucide-react";
+import { HelpCircle, Plus, Minus, Share2, Eye, EyeOff, Grid2x2 } from "lucide-react";
 
 type Props = {
     onHelp: () => void;
@@ -10,6 +10,8 @@ type Props = {
     onShare: () => void;
     overlaysVisible: boolean;
     onToggleOverlays: () => void;
+    gridVisible: boolean;
+    onToggleGrid: () => void;
 };
 
 export function TopLeftControls({
@@ -19,6 +21,8 @@ export function TopLeftControls({
     onShare,
     overlaysVisible,
     onToggleOverlays,
+    gridVisible,
+    onToggleGrid,
 }: Props) {
     return (
         <div className="pointer-events-none fixed top-3 left-3 z-[1000] flex gap-2">
@@ -70,6 +74,16 @@ export function TopLeftControls({
                 title={overlaysVisible ? "Hide overlay" : "Show overlay"}
             >
                 {overlaysVisible ? <Eye className="icon-4" /> : <EyeOff className="icon-4" />}
+            </button>
+
+            {/* Show/Hide grid (dev) */}
+            <button
+                onClick={onToggleGrid}
+                className="pointer-events-auto control-glass control-icon"
+                aria-label={gridVisible ? "Hide grid" : "Show grid"}
+                title={gridVisible ? "Hide grid" : "Show grid"}
+            >
+                <Grid2x2 className="icon-4" />
             </button>
         </div>
     );

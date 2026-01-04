@@ -72,7 +72,9 @@ export function BottomCenterAction({
                 disabled={disabled}
             >
                 <Icon className="h-[18px] w-[18px]" aria-hidden />
-                <span className="text-base font-medium">{label}</span>
+                <span className="text-base font-medium" suppressHydrationWarning>
+                    {label}
+                </span>
 
                 {disabled && (
                     <span className="ml-2 inline-flex items-center text-xs opacity-80">
