@@ -645,6 +645,7 @@ function ensureWorldImage(
         id,
         type: "raster",
         source: id,
+        minzoom: TILES_VISIBLE_ZOOM,
         paint: { "raster-opacity": 1 },
     });
 }
@@ -1288,6 +1289,17 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                         // defensive: ignore map errors during style swaps
                     }
 
+                    // 2) Raster image placements
+                    try {
+                        const layers = map.getStyle?.().layers || [];
+                        for (const layer of layers) {
+                            if (!layer?.id?.startsWith("gp_raster_")) continue;
+                            if (map.getLayer(layer.id)) {
+                                map.setLayoutProperty(layer.id, "visibility", shouldShow ? "visible" : "none");
+                            }
+                        }
+                    } catch { }
+
                     // 2) DOM ghost preview (Marker) — hide its element if zoomed out
                     try {
                         const wrapper = ghostElRef.current;
@@ -1671,6 +1683,15 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
         if (map.getLayer(P_LAYER)) {
             map.setLayoutProperty(P_LAYER, "visibility", overlaysVisible ? "visible" : "none");
         }
+        try {
+            const layers = map.getStyle?.().layers || [];
+            for (const layer of layers) {
+                if (!layer?.id?.startsWith("gp_raster_")) continue;
+                if (map.getLayer(layer.id)) {
+                    map.setLayoutProperty(layer.id, "visibility", overlaysVisible ? "visible" : "none");
+                }
+            }
+        } catch { }
     }, [overlaysVisible]);
 
     // Render top-center hint into document.body so it cannot be occluded by map stacking contexts
