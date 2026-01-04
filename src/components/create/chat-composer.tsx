@@ -275,7 +275,7 @@ export function ChatComposer({
                                         { value: "genplace", label: "GenPlace (default)" },
                                         { value: "openai", label: "OpenAI DALL·E" },
                                         { value: "google", label: "Google Nano Banana" },
-                                        { value: "sdxl", label: "Stable Diffusion XL" },
+                                        { value: "sdxl", label: "Stability Core" },
                                     ].map((item) => (
                                         <SelectItem
                                             key={item.value}

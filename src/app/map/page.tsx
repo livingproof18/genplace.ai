@@ -95,7 +95,12 @@ export default function MapPage() {
     const GEN_RATE_MS = 10_000;
 
     async function requestImages(n: number) {
-        const provider = model === "google" ? "google" : "openai";
+        const provider =
+            model === "google"
+                ? "google"
+                : model === "sdxl"
+                    ? "stability"
+                    : "openai";
         const res = await fetch("/api/generate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },

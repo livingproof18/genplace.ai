@@ -5,7 +5,7 @@ type GenerateRequest = {
     prompt?: string;
     size?: number;
     n?: number;
-    provider?: "openai" | "google";
+    provider?: "openai" | "google" | "stability";
 };
 
 const ALLOWED_SIZES = new Set([128, 256, 512]);
@@ -14,6 +14,58 @@ function toOpenAISize(size?: number) {
     // OpenAI image sizes are 256/512/1024. Map 128 -> 256 for MVP.
     if (size === 512) return "512x512";
     return "256x256";
+}
+
+function stabilityEndpoint() {
+    if (process.env.STABILITY_IMAGE_ENDPOINT) {
+        return process.env.STABILITY_IMAGE_ENDPOINT;
+    }
+    const model = (process.env.STABILITY_IMAGE_MODEL || "stable-image-core").trim();
+    const name = model.replace(/^stable-image-/, "");
+    const path =
+        name === "ultra" || name === "fast" || name === "sd3"
+            ? name
+            : "core";
+    return `https://api.stability.ai/v2beta/stable-image/generate/${path}`;
+}
+
+async function generateWithStability(prompt: string, n: number) {
+    const apiKey = process.env.STABILITY_API_KEY;
+    if (!apiKey) {
+        throw new Error("Stability API key is not configured.");
+    }
+
+    const endpoint = stabilityEndpoint();
+    const calls = Array.from({ length: n }, async () => {
+        const form = new FormData();
+        form.append("prompt", prompt);
+        form.append("output_format", "png");
+        form.append("aspect_ratio", "1:1");
+
+        const res = await fetch(endpoint, {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                Accept: "application/json",
+            },
+            body: form,
+        });
+
+        if (!res.ok) {
+            const errText = await res.text().catch(() => "");
+            throw new Error(`Stability API error: ${errText || res.statusText}`);
+        }
+
+        const data = await res.json().catch(() => ({}));
+        const b64 = data?.image;
+        if (!b64) {
+            throw new Error("Stability API returned no image data.");
+        }
+
+        return { id: crypto.randomUUID(), url: `data:image/png;base64,${b64}` };
+    });
+
+    return Promise.all(calls);
 }
 
 function extractGeminiInlineImage(data: any) {
@@ -92,6 +144,8 @@ export async function POST(req: Request) {
 
         if (provider === "google") {
             variants = await generateWithGoogle(prompt, n);
+        } else if (provider === "stability") {
+            variants = await generateWithStability(prompt, n);
         } else {
             if (!process.env.OPENAI_API_KEY) {
                 return NextResponse.json({ error: "OpenAI API key is not configured." }, { status: 500 });
