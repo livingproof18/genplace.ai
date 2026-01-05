@@ -10,10 +10,9 @@ type GenerateRequest = {
 
 const ALLOWED_SIZES = new Set([128, 256, 512]);
 
-function toOpenAISize(size?: number) {
-    // OpenAI image sizes are 256/512/1024. Map 128 -> 256 for MVP.
-    if (size === 512) return "512x512";
-    return "256x256";
+function toOpenAISize(): "1024x1024" {
+    // gpt-image-1 defaults to 1024x1024; use that for compatibility.
+    return "1024x1024";
 }
 
 function stabilityEndpoint() {
@@ -156,15 +155,14 @@ export async function POST(req: Request) {
             const result = await client.images.generate({
                 model: "gpt-image-1",
                 prompt,
-                size: toOpenAISize(size),
+                size: toOpenAISize(),
                 n,
-                response_format: "url",
             });
 
             variants = (result.data || [])
-                .map((img) => img.url)
-                .filter((url): url is string => Boolean(url))
-                .map((url) => ({ id: crypto.randomUUID(), url }));
+                .map((img) => img.b64_json)
+                .filter((b64): b64 is string => Boolean(b64))
+                .map((b64) => ({ id: crypto.randomUUID(), url: `data:image/png;base64,${b64}` }));
         }
 
         return NextResponse.json({ variants });
