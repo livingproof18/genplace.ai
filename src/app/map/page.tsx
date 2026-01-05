@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import type { PointPlacement, Size, Model } from "@/components/map/types";
+import type { Style } from "@/lib/image-styles";
 
 import { useTokens } from "@/hooks/use-tokens";
 import { mmss } from "@/lib/time";
@@ -31,6 +32,7 @@ export default function MapPage() {
     const [prompt, setPrompt] = useState("");
     const [size, setSize] = useState<Size>(256);
     const [model, setModel] = useState<Model>("openai");
+    const [style, setStyle] = useState<Style>("auto");
     const [presetPoint, setPresetPoint] = useState<{ lat: number; lng: number } | null>(null);
 
     const [generating, setGenerating] = useState(false);
@@ -106,6 +108,7 @@ export default function MapPage() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 prompt: prompt.trim(),
+                style,
                 size,
                 n,
                 provider,
@@ -274,6 +277,8 @@ export default function MapPage() {
                         onPrompt={setPrompt}
                         model={model}
                         onModel={setModel}
+                        style={style}
+                        onStyle={setStyle}
                         size={size}
                         onSize={setSize}
                         onSubmit={onSubmitFromComposer}

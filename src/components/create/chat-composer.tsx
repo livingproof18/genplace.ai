@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { cn } from "@/lib/utils";
 import type { TokensState } from "@/hooks/use-tokens";
 import type { Model, Size } from "@/components/map/types";
+import { STYLE_PRESETS, type Style } from "@/lib/image-styles";
 import { motion, AnimatePresence } from "framer-motion";
 
 const DRAFT_KEY = "genplace:composer:draft";
@@ -34,12 +35,27 @@ const MODEL_OPTIONS = [
     { value: "sdxl", label: "Stable Image Core", provider: "Stability AI", Icon: Shield },
 ] as const;
 
+const STYLE_OPTIONS: Array<{ value: Style; emoji: string }> = [
+    { value: "auto", emoji: "✨" },
+    { value: "cinematic", emoji: "🎬" },
+    { value: "anime", emoji: "🌸" },
+    { value: "oil", emoji: "🖌️" },
+    { value: "watercolor", emoji: "💧" },
+    { value: "pixel", emoji: "🟪" },
+    { value: "3d", emoji: "🧊" },
+    { value: "comic", emoji: "💥" },
+    { value: "minimal", emoji: "◻️" },
+    { value: "neon", emoji: "⚡" },
+];
+
 export function ChatComposer({
     tokens,
     prompt,
     onPrompt,
     model,
     onModel,
+    style,
+    onStyle,
     size,
     onSize,
     canSubmit,
@@ -52,6 +68,8 @@ export function ChatComposer({
     onPrompt: (v: string) => void;
     model: Model;
     onModel: (m: Model) => void;
+    style: Style;
+    onStyle: (s: Style) => void;
     size: Size;
     onSize: (s: Size) => void;
     canSubmit: boolean;
@@ -314,6 +332,49 @@ export function ChatComposer({
                                                 </span>
                                             </span>
                                         </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+
+                            <Select value={style} onValueChange={(v) => onStyle(v as Style)}>
+                                <SelectTrigger
+                                    className={cn(
+                                        "w-[150px] h-11 text-sm rounded-full border bg-secondary/50",
+                                        "border-border/50 hover:bg-secondary/70 transition-colors",
+                                        "focus:outline-none focus:ring-2 focus:ring-primary cursor-pointer"
+                                    )}
+                                    title="Adds a visual style to your prompt"
+                                >
+                                    <SelectValue placeholder="Style: Auto">
+                                        <span className="text-[13px] font-medium text-foreground">
+                                            {STYLE_PRESETS[style]?.label ?? "Auto"}
+                                        </span>
+                                    </SelectValue>
+                                </SelectTrigger>
+
+                                <SelectContent
+                                    className={cn(
+                                        "z-[2000] bg-popover text-popover-foreground rounded-xl border border-border/50 shadow-xl",
+                                        "animate-in fade-in slide-in-from-top-1 p-1 space-y-1"
+                                    )}
+                                >
+                                    {STYLE_OPTIONS.map((item, idx) => (
+                                        <React.Fragment key={item.value}>
+                                            {idx === 1 && <div className="my-1 h-px bg-border/60" />}
+                                        <SelectItem
+                                            value={item.value}
+                                            className={cn(
+                                                "cursor-pointer rounded-md px-3 py-2 text-sm transition-colors",
+                                                "data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary",
+                                                "hover:bg-accent/40 hover:text-foreground focus:bg-accent/50"
+                                            )}
+                                        >
+                                            <span className="flex items-center gap-2">
+                                                <span className="text-base">{item.emoji}</span>
+                                                <span className="text-[13px] font-medium">{STYLE_PRESETS[item.value].label}</span>
+                                            </span>
+                                        </SelectItem>
+                                        </React.Fragment>
                                     ))}
                                 </SelectContent>
                             </Select>
