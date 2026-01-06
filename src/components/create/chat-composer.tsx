@@ -229,7 +229,7 @@ export function ChatComposer({
                                     )}
                                 >
                                     <div className="grid grid-cols-3 gap-2">
-                                        {[128, 256, 512].map((s) => (
+                                        {[24, 48, 64, 96, 128, 256, 384, 512].map((s) => (
                                             <button
                                                 key={s}
                                                 onClick={() => {

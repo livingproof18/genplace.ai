@@ -528,6 +528,7 @@ const addedImages = new Set<string>();
 // Use a reference zoom that matches the zoom where you expect the artwork to be visible.
 // If this is too high (e.g., 22), sizes like 128/256 become sub‑pixel at z~11.
 const CANVAS_ZOOM = MIN_INTERACT_ZOOM;
+// const CANVAS_ZOOM = 11; // frozen world reference
 
 /**
  * Compute geographic bounds for a square image centered at [lng, lat],
@@ -829,7 +830,7 @@ type Props = {
     placements: PointPlacement[];
     onClickEmpty: (xy: { lng: number; lat: number }) => void; // ⬅️ changed
     onClickPlacement: (p: PointPlacement) => void;
-    sizePx: 128 | 256 | 512;
+    sizePx: 24 | 48 | 64 | 96 | 128 | 256 | 384 | 512;
     onCreate?: () => void;            // ⬅️ new: open prompt drawer
     hasTokens?: boolean;              // ⬅️ new: control disabled state
     cooldownLabel?: string;           // ⬅️ new: e.g. "Out of tokens — regenerates in 2:14"

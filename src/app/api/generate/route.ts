@@ -10,7 +10,7 @@ type GenerateRequest = {
   provider?: "openai" | "google" | "stability";
 };
 
-const ALLOWED_SIZES = new Set([128, 256, 512]);
+const ALLOWED_SIZES = new Set([24, 48, 64, 96, 128, 256, 384, 512]);
 
 function toOpenAISize(): "1024x1024" {
   // gpt-image-1 defaults to 1024x1024; use that for compatibility.
