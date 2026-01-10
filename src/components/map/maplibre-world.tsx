@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { TopLeftControls } from "./top-left-controls";
-import { TopRightControls } from "./top-right-controls"; // ⬅️ add this import
+import { TopRightControls, type UserStub } from "./top-right-controls"; // ⬅️ add this import
 import { BottomCenterAction } from "./bottom-center-action";
 import { toast } from "sonner";
 import { SelectionModal, type TileMeta } from "./selection-modal";
@@ -837,6 +837,8 @@ type Props = {
     label?: string;                   // ⬅️ new: e.g. "Create 1/5"
     generationMode?: boolean;          // ⬅️ new: whether in generation mode (affects UI)
     previewUrl?: string | null;     // ← add
+    user?: UserStub | null;
+    onLogin?: () => void;
 
 };
 
@@ -848,8 +850,9 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     cooldownLabel = "You're out of tokens — regenerates soon",
     label = "Create",
     generationMode,
-    previewUrl
-
+    previewUrl,
+    user = null,
+    onLogin
 }: Props) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<any>(null);
@@ -1756,13 +1759,6 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
         const text = encodeURIComponent("Check out the GenPlace collaborative AI canvas!");
         window.open(`https://x.com/intent/tweet?text=${text}%20${encodeURIComponent(url)}`, "_blank");
     };
-
-    // Optional: route or modal for login
-    const onLogin = () => {
-        // Replace with your auth modal or router push
-        window.location.href = "/login";
-    };
-
     // NEW: locate me
     // Locate me -> zoom-out → slide → zoom-in
 
@@ -1874,7 +1870,7 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
 
             {/* Top-right controls (column) */}
             <TopRightControls
-                user={{ name: "Alice Johnson", username: "alicej", userId: "1234", firstName: "Alice" }} // or null for logged-out
+                user={user}
                 onLogin={onLogin}
                 onLocateMe={locateMe}
                 onRandom={flyRandom}
