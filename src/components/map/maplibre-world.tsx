@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { TopLeftControls } from "./top-left-controls";
-import { TopRightControls } from "./top-right-controls"; // ⬅️ add this import
+import { TopRightControls, type UserStub } from "./top-right-controls"; // ⬅️ add this import
 import { BottomCenterAction } from "./bottom-center-action";
 import { toast } from "sonner";
 import { SelectionModal, type TileMeta } from "./selection-modal";
@@ -528,6 +528,7 @@ const addedImages = new Set<string>();
 // Use a reference zoom that matches the zoom where you expect the artwork to be visible.
 // If this is too high (e.g., 22), sizes like 128/256 become sub‑pixel at z~11.
 const CANVAS_ZOOM = MIN_INTERACT_ZOOM;
+// const CANVAS_ZOOM = 11; // frozen world reference
 
 /**
  * Compute geographic bounds for a square image centered at [lng, lat],
@@ -829,13 +830,15 @@ type Props = {
     placements: PointPlacement[];
     onClickEmpty: (xy: { lng: number; lat: number }) => void; // ⬅️ changed
     onClickPlacement: (p: PointPlacement) => void;
-    sizePx: 128 | 256 | 512;
+    sizePx: 24 | 48 | 64 | 96 | 128 | 256 | 384 | 512;
     onCreate?: () => void;            // ⬅️ new: open prompt drawer
     hasTokens?: boolean;              // ⬅️ new: control disabled state
     cooldownLabel?: string;           // ⬅️ new: e.g. "Out of tokens — regenerates in 2:14"
     label?: string;                   // ⬅️ new: e.g. "Create 1/5"
     generationMode?: boolean;          // ⬅️ new: whether in generation mode (affects UI)
     previewUrl?: string | null;     // ← add
+    user?: UserStub | null;
+    onLogin?: () => void;
 
 };
 
@@ -847,8 +850,9 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     cooldownLabel = "You're out of tokens — regenerates soon",
     label = "Create",
     generationMode,
-    previewUrl
-
+    previewUrl,
+    user = null,
+    onLogin
 }: Props) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<any>(null);
@@ -1755,13 +1759,6 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
         const text = encodeURIComponent("Check out the GenPlace collaborative AI canvas!");
         window.open(`https://x.com/intent/tweet?text=${text}%20${encodeURIComponent(url)}`, "_blank");
     };
-
-    // Optional: route or modal for login
-    const onLogin = () => {
-        // Replace with your auth modal or router push
-        window.location.href = "/login";
-    };
-
     // NEW: locate me
     // Locate me -> zoom-out → slide → zoom-in
 
@@ -1873,7 +1870,7 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
 
             {/* Top-right controls (column) */}
             <TopRightControls
-                user={{ name: "Alice Johnson", username: "alicej", userId: "1234", firstName: "Alice" }} // or null for logged-out
+                user={user}
                 onLogin={onLogin}
                 onLocateMe={locateMe}
                 onRandom={flyRandom}

@@ -18,4 +18,4 @@ export type PointPlacement = {
 };
 
 export type Model = "openai" | "google" | "sdxl";
-export type Size = 128 | 256 | 512;
+export type Size = 24 | 48 | 64 | 96 | 128 | 256 | 384 | 512;

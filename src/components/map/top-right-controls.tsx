@@ -7,7 +7,7 @@ import { LocateFixed, Shuffle } from "lucide-react";
 import { useTheme } from "next-themes";
 import * as React from "react";
 
-type UserStub = {
+export type UserStub = {
     name?: string;         // display name (e.g., "Alice Johnson")
     username?: string;     // handle (e.g., "alice")
     userId?: string;       // id string (e.g., "1234")

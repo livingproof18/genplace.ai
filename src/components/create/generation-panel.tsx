@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import type { TokensState } from "@/hooks/use-tokens";
 import type { Model, Size } from "@/components/map/types";
+import { GenerationPhases } from "@/components/create/generation-phases";
 
 export type Variant = { id: string; url: string };
 
@@ -74,14 +75,14 @@ export function GenerationPanel({
 
     const canPlace = !!selectedId && hasPoint && tokens.current > 0 && !generating;
     if (!open) return null;
-
+    // generating = true
     return (
         <section
             role="dialog"
             aria-label="Image generation"
             className={cn(
                 "fixed top-[max(16px,env(safe-area-inset-top))] right-[max(16px,env(safe-area-inset-right))]",
-                "w-[min(520px,92vw)] h-[min(70vh,820px)] z-[1300]",
+                "w-[min(520px,92vw)] h-[min(72vh,820px)] z-[1300]",
                 "rounded-3xl border border-border/40 bg-background text-foreground",
                 "shadow-[0_12px_40px_rgba(0,0,0,0.25)] backdrop-blur-md flex flex-col overflow-hidden transition-all duration-300"
             )}
@@ -115,9 +116,12 @@ export function GenerationPanel({
                             <div className="h-full w-1/3 animate-[gp_progress_1.2s_linear_infinite] bg-primary/80 rounded-full" />
                         </div>
 
-                        <p className="text-sm text-muted-foreground mb-2">
+                        <p className="text-sm text-muted-foreground mb-1">
                             Dreaming up images…
                         </p>
+
+                        <GenerationPhases active={generating} className="mb-1" />
+
 
                         {/* Animated rotating tip */}
                         <div className="relative h-5 mb-4 overflow-hidden">

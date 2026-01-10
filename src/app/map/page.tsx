@@ -3,9 +3,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import type { PointPlacement, Size, Model } from "@/components/map/types";
+import type { Style } from "@/lib/image-styles";
+import type { User } from "@supabase/supabase-js";
 
 import { useTokens } from "@/hooks/use-tokens";
 import { mmss } from "@/lib/time";
+import { createBrowserClient } from "@/lib/supabase/browser";
+import { LoginModal } from "@/components/auth/login-modal";
+import type { UserStub } from "@/components/map/top-right-controls";
 
 import { ChatComposer } from "@/components/create/chat-composer";
 import { GenerationPanel, type Variant } from "@/components/create/generation-panel";
@@ -23,6 +28,9 @@ const MapLibreWorld = dynamic(
 
 export default function MapPage() {
     const { tokens, setTokens } = useTokens();
+    const supabase = useMemo(() => createBrowserClient(), []);
+    const [authUser, setAuthUser] = useState<User | null>(null);
+    const [loginOpen, setLoginOpen] = useState(false);
 
     // map placements
     const [placements, setPlacements] = useState<PointPlacement[]>([]);
@@ -31,6 +39,7 @@ export default function MapPage() {
     const [prompt, setPrompt] = useState("");
     const [size, setSize] = useState<Size>(256);
     const [model, setModel] = useState<Model>("openai");
+    const [style, setStyle] = useState<Style>("auto");
     const [presetPoint, setPresetPoint] = useState<{ lat: number; lng: number } | null>(null);
 
     const [generating, setGenerating] = useState(false);
@@ -43,6 +52,23 @@ export default function MapPage() {
 
     // NEW: gate the ChatComposer
     const [composerOpen, setComposerOpen] = useState(false);
+
+    const userStub: UserStub | null = useMemo(() => {
+        if (!authUser) return null;
+        const metadata = authUser.user_metadata ?? {};
+        const name = metadata.full_name || metadata.name || authUser.email || undefined;
+        const username =
+            metadata.user_name ||
+            metadata.preferred_username ||
+            (name ? String(name).split(/\s+/)[0].toLowerCase() : undefined);
+        return {
+            name: name ? String(name) : undefined,
+            username: username ? String(username) : undefined,
+            userId: authUser.id.slice(0, 6),
+            firstName: name ? String(name).split(/\s+/)[0] : undefined,
+            avatarUrl: metadata.avatar_url ? String(metadata.avatar_url) : undefined,
+        };
+    }, [authUser]);
 
     // === util ===
     const cooldownMs = Math.max(0, tokens.nextRegenAt - Date.now());
@@ -106,6 +132,7 @@ export default function MapPage() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 prompt: prompt.trim(),
+                style,
                 size,
                 n,
                 provider,
@@ -154,6 +181,35 @@ export default function MapPage() {
     useEffect(() => {
         console.log("panelOpen changed:", panelOpen);
     }, [panelOpen]);
+
+    useEffect(() => {
+        let mounted = true;
+        supabase.auth
+            .getSession()
+            .then(({ data }) => {
+                if (!mounted) return;
+                setAuthUser(data.session?.user ?? null);
+            })
+            .catch(() => {
+                if (!mounted) return;
+                setAuthUser(null);
+            });
+
+        const { data: subscription } = supabase.auth.onAuthStateChange(
+            (_event, session) => {
+                setAuthUser(session?.user ?? null);
+            }
+        );
+
+        return () => {
+            mounted = false;
+            subscription.subscription.unsubscribe();
+        };
+    }, [supabase]);
+
+    useEffect(() => {
+        if (authUser) setLoginOpen(false);
+    }, [authUser]);
 
 
     // submit → open panel and (optionally) hide composer to keep the screen clean
@@ -243,6 +299,8 @@ export default function MapPage() {
                 // <-- NEW: tell the map we're in generation mode when the panel is open
                 generationMode={panelOpen}
                 previewUrl={selectedId ? variants.find(v => v.id === selectedId)?.url || null : null}
+                user={userStub}
+                onLogin={() => setLoginOpen(true)}
 
             />
 
@@ -274,6 +332,8 @@ export default function MapPage() {
                         onPrompt={setPrompt}
                         model={model}
                         onModel={setModel}
+                        style={style}
+                        onStyle={setStyle}
                         size={size}
                         onSize={setSize}
                         onSubmit={onSubmitFromComposer}
@@ -313,6 +373,8 @@ export default function MapPage() {
                 onPlace={onPlaceSelected}
                 cooldownMs={cooldownMs}
             />
+
+            <LoginModal open={loginOpen} onOpenChange={setLoginOpen} />
         </div>
     );
 
