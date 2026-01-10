@@ -1,84 +1,70 @@
 // src/hooks/use-tokens.ts
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export type TokensState = {
   current: number;
   max: number;
-  nextRegenAt: number; // epoch ms
+  cooldownUntil: number | null; // epoch ms
+  totalGenerations: number;
 };
 
-const STORAGE_KEY = "genplace:tokens:v1";
-
-const DEFAULT: TokensState = {
-  current: 5,
-  max: 5,
-  nextRegenAt: Date.now(), // regenerate only when < max
+type TokenRow = {
+  tokens_current: number;
+  tokens_max: number;
+  cooldown_until: string | null;
+  total_generations: number | null;
 };
 
-// MVP: +1 token every 2 minutes (tweak freely)
-const REGEN_MS = 2 * 60 * 1000;
+const EMPTY: TokensState = {
+  current: 0,
+  max: 0,
+  cooldownUntil: null,
+  totalGenerations: 0,
+};
+
+function toTokenState(row: TokenRow): TokensState {
+  const cooldownMs = row.cooldown_until
+    ? Date.parse(row.cooldown_until)
+    : Number.NaN;
+
+  return {
+    current: row.tokens_current ?? 0,
+    max: row.tokens_max ?? 0,
+    cooldownUntil: Number.isFinite(cooldownMs) ? cooldownMs : null,
+    totalGenerations: row.total_generations ?? 0,
+  };
+}
 
 export function useTokens() {
-  const [tokens, setTokens] = useState<TokensState>(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      return raw ? JSON.parse(raw) : DEFAULT;
-    } catch {
-      return DEFAULT;
-    }
-  });
+  const [tokens, setTokens] = useState<TokensState>(EMPTY);
+  const [loading, setLoading] = useState(true);
 
-  // persist
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(tokens));
-    } catch {}
-  }, [tokens]);
-
-  // regen loop
-  const raf = useRef<number | null>(null);
-  useEffect(() => {
-    const tick = () => {
-      const now = Date.now();
-      setTokens((t) => {
-        if (t.current >= t.max) return t;
-        if (now >= t.nextRegenAt) {
-          const next = Math.min(t.max, t.current + 1);
-          return {
-            current: next,
-            max: t.max,
-            nextRegenAt: next >= t.max ? now : now + REGEN_MS,
-          };
-        }
-        return t;
-      });
-      raf.current = requestAnimationFrame(tick);
-    };
-    raf.current = requestAnimationFrame(tick);
-    return () => {
-      if (raf.current) cancelAnimationFrame(raf.current);
-    };
+  const applyTokenState = useCallback((row: TokenRow | null | undefined) => {
+    if (!row) return;
+    setTokens(toTokenState(row));
   }, []);
 
-  const consume = (n = 1) =>
-    setTokens((t) => {
-      if (t.current < n) return t;
-      const left = t.current - n;
-      return {
-        current: left,
-        max: t.max,
-        nextRegenAt: left < t.max ? Date.now() + REGEN_MS : t.nextRegenAt,
+  const refreshTokens = useCallback(async () => {
+    try {
+      const res = await fetch("/api/tokens", { method: "GET" });
+      if (!res.ok) {
+        setTokens(EMPTY);
+        return;
+      }
+      const data = (await res.json().catch(() => ({}))) as {
+        tokens?: TokenRow;
       };
-    });
+      applyTokenState(data.tokens);
+    } finally {
+      setLoading(false);
+    }
+  }, [applyTokenState]);
 
-  const setMax = (max: number) =>
-    setTokens((t) => ({
-      current: Math.min(t.current, max),
-      max,
-      nextRegenAt: t.current < max ? Date.now() + REGEN_MS : t.nextRegenAt,
-    }));
+  useEffect(() => {
+    refreshTokens();
+  }, [refreshTokens]);
 
-  return { tokens, consume, setTokens, setMax };
+  return { tokens, loading, refreshTokens, applyTokenState };
 }

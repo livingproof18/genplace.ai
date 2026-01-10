@@ -155,15 +155,7 @@ export function PromptDrawer({
     if (!point) throw new Error("No placement point");
     const picked = variants.find((v) => v.id === req.variantId)!;
 
-    const next: TokensState =
-      tokens.current > 0
-        ? {
-          current: tokens.current - 1,
-          max: tokens.max,
-          nextRegenAt:
-            tokens.current - 1 < tokens.max ? Date.now() + 2 * 60 * 1000 : tokens.nextRegenAt,
-        }
-        : tokens;
+    const next: TokensState = tokens;
 
     return {
       placed: { url: picked.url, lat: point.lat, lng: point.lng },
@@ -248,7 +240,7 @@ export function PromptDrawer({
     }
   }
 
-  const cooldownMs = Math.max(0, tokens.nextRegenAt - Date.now());
+  const cooldownMs = Math.max(0, (tokens.cooldownUntil ?? 0) - Date.now());
 
   // ---- UI
 
@@ -269,7 +261,7 @@ export function PromptDrawer({
             <Dialog.Title className="text-lg font-semibold">Create</Dialog.Title>
             <div className="text-xs font-mono text-muted-foreground">
               Tokens {tokens.current}/{tokens.max}
-              {tokens.current < tokens.max && ` • Next +1 in ${mmss(cooldownMs)}`}
+              {cooldownMs > 0 && ` | Cooldown ${mmss(cooldownMs)}`}
             </div>
             <Dialog.Close asChild>
               <button className="ml-3 inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted">
@@ -290,7 +282,6 @@ export function PromptDrawer({
                 )}
               >
                 {s}
-                <span className="ml-2 text-[10px] opacity-70 align-middle">(1 token)</span>
               </button>
             ))}
           </div>
@@ -431,12 +422,12 @@ export function PromptDrawer({
                     "disabled:opacity-60"
                   )}
                 >
-                  {busy === "placing" ? "Placing…" : `Place (1 token)`}
+                  {busy === "placing" ? "Placing…" : "Place"}
                 </button>
                 <div className="text-xs font-mono text-muted-foreground">
                   {tokens.current > 0
                     ? "Tokens available"
-                    : `Out of tokens — regenerates in ${mmss(cooldownMs)}`}
+                    : `Out of tokens${cooldownMs > 0 ? ` | Cooldown ${mmss(cooldownMs)}` : ""}`}
                 </div>
               </div>
             </div>

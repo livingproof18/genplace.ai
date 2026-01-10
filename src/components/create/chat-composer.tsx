@@ -52,6 +52,7 @@ const STYLE_OPTIONS: Array<{ value: Style; emoji: string }> = [
 
 export function ChatComposer({
     tokens,
+    tokenCost,
     prompt,
     onPrompt,
     model,
@@ -66,6 +67,7 @@ export function ChatComposer({
     onClose, // new prop
 }: {
     tokens: TokensState;
+    tokenCost: number;
     prompt: string;
     onPrompt: (v: string) => void;
     model: Model;
@@ -117,9 +119,10 @@ export function ChatComposer({
         return () => window.removeEventListener("genplace:composer:focus", onFocusComposer);
     }, []);
 
+    const costLabel = `Cost ${tokenCost} token${tokenCost === 1 ? "" : "s"}`;
     const tokenHud =
-        `Tokens ${tokens.current}/${tokens.max}` +
-        (tokens.current < tokens.max ? ` • +1 in ${cooldownLabel.replace(/^Next \+1 in /, "")}` : "");
+        `Tokens ${tokens.current}/${tokens.max} | ${costLabel}` +
+        (cooldownLabel ? ` | ${cooldownLabel}` : "");
 
     const onKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = (e) => {
         if (e.key === "Enter" && !e.shiftKey) {
@@ -216,7 +219,7 @@ export function ChatComposer({
                                             "hover:bg-secondary/70 active:bg-secondary/80 focus:outline-none focus:ring-2 focus:ring-primary"
                                         )}
                                     >
-                                        Size: {size} <span className="opacity-70">(1 token)</span>
+                                        Size: {size}
                                         <ChevronDown className="w-3.5 h-3.5" />
                                     </button>
                                 </PopoverTrigger>
@@ -249,7 +252,6 @@ export function ChatComposer({
                                                 )}
                                             >
                                                 {s}
-                                                <div className="text-[10px] opacity-70">(1 token)</div>
                                             </button>
                                         ))}
                                     </div>

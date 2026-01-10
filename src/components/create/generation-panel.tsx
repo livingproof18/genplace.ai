@@ -18,6 +18,7 @@ type Props = {
     model: Model;
     size: Size;
     tokens: TokensState;
+    tokenCost: number;
     generating: boolean;
     variants: Variant[];
     selectedId: string | null;
@@ -42,6 +43,7 @@ export function GenerationPanel({
     model,
     size,
     tokens,
+    tokenCost,
     generating,
     variants,
     selectedId,
@@ -73,7 +75,9 @@ export function GenerationPanel({
     // }, [onOpenChange]);
 
 
-    const canPlace = !!selectedId && hasPoint && tokens.current > 0 && !generating;
+    const canPlace = !!selectedId && hasPoint && !generating;
+    const cooldownSeconds = Math.ceil(cooldownMs / 1000);
+    const cooldownLabel = cooldownMs > 0 ? ` | Cooldown ${cooldownSeconds}s` : "";
     if (!open) return null;
     // generating = true
     return (
@@ -94,7 +98,8 @@ export function GenerationPanel({
                     <span className="mx-2 opacity-50">•</span>
                     <span className="font-medium text-foreground">Size:</span> {size}
                     <span className="mx-2 opacity-50">•</span>
-                    <span className="font-medium text-foreground">Cost:</span> 1 token
+                    <span className="font-medium text-foreground">Cost:</span>{" "}
+                    {tokenCost} token{tokenCost === 1 ? "" : "s"}
                 </div>
                 <Button
                     variant="ghost"
@@ -262,9 +267,7 @@ export function GenerationPanel({
                     </Button>
 
                     <div className="text-xs font-mono text-muted-foreground">
-                        {tokens.current > 0
-                            ? `Tokens ${tokens.current}/${tokens.max}`
-                            : `Out of tokens — +1 in ${Math.ceil(cooldownMs / 1000)}s`}
+                        {`Tokens ${tokens.current}/${tokens.max}${cooldownLabel}`}
                     </div>
                 </div>
             </div>

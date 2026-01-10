@@ -8,10 +8,9 @@ type PublicUser = {
   provider: string | null;
   tokens_current: number;
   tokens_max: number;
-  next_token_at: string | null;
+  cooldown_until: string | null;
+  total_generations: number;
 };
-
-const TOKEN_COOLDOWN_MINUTES = 10;
 
 function buildHandle(authUser: User) {
   const metadata = authUser.user_metadata ?? {};
@@ -45,9 +44,6 @@ export async function ensureUserExists(
     return existing as PublicUser;
   }
 
-  const nextTokenAt = new Date(
-    Date.now() + TOKEN_COOLDOWN_MINUTES * 60 * 1000
-  ).toISOString();
   const metadata = authUser.user_metadata ?? {};
 
   const { data: inserted, error: insertError } = await supabaseAdmin
@@ -57,9 +53,10 @@ export async function ensureUserExists(
       handle: buildHandle(authUser),
       avatar_url: metadata.avatar_url ?? null,
       provider: authUser.app_metadata?.provider ?? null,
-      tokens_current: 1,
-      tokens_max: 2,
-      next_token_at: nextTokenAt,
+      tokens_current: 0,
+      tokens_max: 0,
+      cooldown_until: null,
+      total_generations: 0,
     })
     .select("*")
     .single();

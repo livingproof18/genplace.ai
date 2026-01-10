@@ -21,7 +21,7 @@ export function BottomCenterAction({
     onClick,
     disabled = false,
     tooltip = "Type a prompt → generate → place it on the map",
-    cooldownText = "You're out of tokens — regenerates soon",
+    cooldownText = "You're out of tokens.",
     icon = "wand",
     className,
 }: Props) {

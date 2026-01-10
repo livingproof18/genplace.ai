@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import type { PointPlacement, Size, Model } from "@/components/map/types";
 import type { Style } from "@/lib/image-styles";
 import type { User } from "@supabase/supabase-js";
 
 import { useTokens } from "@/hooks/use-tokens";
-import { mmss } from "@/lib/time";
+import { MODEL_TOKEN_COST, type TokenModelId } from "@/lib/tokens/model-cost";
 import { createBrowserClient } from "@/lib/supabase/browser";
 import { LoginModal } from "@/components/auth/login-modal";
 import type { UserStub } from "@/components/map/top-right-controls";
@@ -15,11 +15,20 @@ import type { UserStub } from "@/components/map/top-right-controls";
 import { ChatComposer } from "@/components/create/chat-composer";
 import { GenerationPanel, type Variant } from "@/components/create/generation-panel";
 import { BottomCenterAction } from "@/components/map/bottom-center-action";
+import { TokenDebugPanel } from "@/components/dev/token-debug";
 
 import { AnimatePresence } from "framer-motion";
 
 const DRAFT_KEY = "genplace:composer:draft";
 const DRAFT_SAVED_AT_KEY = "genplace:composer:draftSavedAt";
+
+const TOKEN_MODEL_BY_UI: Record<Model, TokenModelId> = {
+    "google-flash": "google-nano-banana",
+    "google-pro": "google-nano-banana-pro",
+    "openai-1": "openai-gpt-image-1",
+    "openai-1.5": "openai-gpt-image-1.5",
+    sdxl: "stability-core",
+};
 
 const MapLibreWorld = dynamic(
     () => import("@/components/map/maplibre-world").then((m) => m.MapLibreWorld),
@@ -27,10 +36,11 @@ const MapLibreWorld = dynamic(
 );
 
 export default function MapPage() {
-    const { tokens, setTokens } = useTokens();
+    const { tokens, loading: tokensLoading, refreshTokens, applyTokenState } = useTokens();
     const supabase = useMemo(() => createBrowserClient(), []);
     const [authUser, setAuthUser] = useState<User | null>(null);
     const [loginOpen, setLoginOpen] = useState(false);
+    const [now, setNow] = useState(Date.now());
 
     // map placements
     const [placements, setPlacements] = useState<PointPlacement[]>([]);
@@ -46,8 +56,6 @@ export default function MapPage() {
     const [variants, setVariants] = useState<Variant[]>([]);
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [panelOpen, setPanelOpen] = useState(false);
-    const lastGenAtRef = useRef(0);
-
     const [genError, setGenError] = useState<string | null>(null);
 
     // NEW: gate the ChatComposer
@@ -70,9 +78,32 @@ export default function MapPage() {
         };
     }, [authUser]);
 
+    useEffect(() => {
+        const id = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(id);
+    }, []);
+
     // === util ===
-    const cooldownMs = Math.max(0, tokens.nextRegenAt - Date.now());
-    const canSubmit = prompt.trim().length > 0 && tokens.current > 0 && !generating;
+    const tokenModel = TOKEN_MODEL_BY_UI[model];
+    const tokenCost = MODEL_TOKEN_COST[tokenModel];
+    const cooldownMs = Math.max(0, (tokens.cooldownUntil ?? 0) - now);
+    const cooldownActive = cooldownMs > 0;
+    const cooldownSeconds = Math.ceil(cooldownMs / 1000);
+    const cooldownLabel = cooldownActive ? `Cooldown ${cooldownSeconds}s` : "";
+    const disabledReason = tokensLoading
+        ? "Loading tokens..."
+        : tokens.current <= 0
+            ? "Out of tokens."
+            : cooldownLabel;
+    const createLabel = tokensLoading
+        ? "Create"
+        : `Create ${tokens.current}/${tokens.max}`;
+    const canSubmit =
+        !tokensLoading &&
+        prompt.trim().length > 0 &&
+        tokens.current >= tokenCost &&
+        !generating &&
+        !cooldownActive;
 
     // === events from map ===
     // === events from map ===
@@ -118,8 +149,6 @@ export default function MapPage() {
     }, []);
 
 
-    const GEN_RATE_MS = 10_000;
-
     async function requestImages(n: number) {
         const provider =
             model === "google-flash" || model === "google-pro"
@@ -147,33 +176,36 @@ export default function MapPage() {
                 n,
                 provider,
                 modelId,
+                tokenModel,
             }),
         });
 
+        const data = (await res.json().catch(() => ({}))) as {
+            variants?: Variant[];
+            tokens?: {
+                tokens_current: number;
+                tokens_max: number;
+                cooldown_until: string | null;
+                total_generations: number | null;
+            };
+            error?: string;
+            code?: string;
+        };
+
         if (!res.ok) {
-            const data = await res.json().catch(() => ({}));
-            throw new Error(data?.error || "Image generation failed.");
+            const err = new Error(data?.error || "Image generation failed.");
+            (err as Error & { code?: string }).code = data?.code;
+            throw err;
         }
 
-        const data = (await res.json()) as { variants?: Variant[] };
+        applyTokenState(data.tokens);
         return data.variants ?? [];
-    }
-
-    async function doGenerate() {
-        const now = Date.now();
-        const since = now - lastGenAtRef.current;
-        if (since < GEN_RATE_MS) {
-            // surface via panel banner
-            throw new Error(`Please wait ${mmss(GEN_RATE_MS - since)} before generating again.`);
-        }
-        lastGenAtRef.current = now;
-
-        return requestImages(2);
     }
 
     async function regenerateOne(slot: 0 | 1) {
         if (!panelOpen || generating) return;
         setGenerating(true);
+        setGenError(null);
         try {
             const imgs = await requestImages(1);
             const nextImg = imgs[0];
@@ -184,6 +216,13 @@ export default function MapPage() {
                     return next;
                 });
             }
+        } catch (err) {
+            if (err instanceof Error) {
+                setGenError(err.message);
+            } else {
+                setGenError("Something went wrong. Try again.");
+            }
+            await refreshTokens();
         } finally {
             setGenerating(false);
         }
@@ -222,6 +261,10 @@ export default function MapPage() {
         if (authUser) setLoginOpen(false);
     }, [authUser]);
 
+    useEffect(() => {
+        refreshTokens();
+    }, [authUser, refreshTokens]);
+
 
     // submit → open panel and (optionally) hide composer to keep the screen clean
     // submit → open panel and (optionally) hide composer to keep the screen clean
@@ -238,37 +281,31 @@ export default function MapPage() {
         setGenError(null);
 
         try {
-            const imgs = await doGenerate();
+            const imgs = await requestImages(2);
             console.log("Generated images:", imgs);
             setVariants(imgs.slice(0, 2));
         } catch (err) {
             setVariants([]);
             setSelectedId(null);
-            const message = err instanceof Error ? err.message : "Something went wrong. Try again.";
-            setGenError(message);
+            if (err instanceof Error) {
+                setGenError(err.message);
+            } else {
+                setGenError("Something went wrong. Try again.");
+            }
+            await refreshTokens();
         } finally {
             setGenerating(false);
         }
     }
 
     async function onPlaceSelected() {
-        if (!selectedId || !presetPoint || tokens.current <= 0) return;
+        if (!selectedId || !presetPoint) return;
 
         // simulate place
         await new Promise((r) => setTimeout(r, 600 + Math.random() * 600));
         const picked = variants.find((v) => v.id === selectedId);
         console.log("Placing image:", picked, "at", presetPoint);
         if (!picked) return;
-
-        // consume 1 token
-        setTokens((t) => {
-            const left = Math.max(0, t.current - 1);
-            return {
-                current: left,
-                max: t.max,
-                nextRegenAt: left < t.max ? Date.now() + 2 * 60 * 1000 : t.nextRegenAt,
-            };
-        });
 
         // add to map
         setPlacements((prev) => [
@@ -304,9 +341,9 @@ export default function MapPage() {
                 placements={placements}
                 onClickEmpty={() => { }}
                 onClickPlacement={() => { }}
-                hasTokens={tokens.current > 0}
-                cooldownLabel={`Out of tokens — regenerates in ${mmss(cooldownMs)}`}
-                label={`Create ${tokens.current}/${tokens.max}`}
+                hasTokens={!tokensLoading && tokens.current > 0 && !cooldownActive}
+                cooldownLabel={disabledReason}
+                label={createLabel}
                 // <-- NEW: tell the map we're in generation mode when the panel is open
                 generationMode={panelOpen}
                 previewUrl={selectedId ? variants.find(v => v.id === selectedId)?.url || null : null}
@@ -318,9 +355,9 @@ export default function MapPage() {
             {/* Show the main bottom "Create" button only when the composer is closed AND the generation panel is NOT open */}
             {!composerOpen && !panelOpen && (
                 <BottomCenterAction
-                    label={`Create ${tokens.current}/${tokens.max}`}
-                    disabled={tokens.current <= 0}
-                    cooldownText={`Out of tokens — regenerates in ${mmss(cooldownMs)}`}
+                    label={createLabel}
+                    disabled={tokensLoading || tokens.current <= 0 || cooldownActive}
+                    cooldownText={disabledReason}
                     onClick={() => {
                         // idea-first create
                         setPresetPoint(null);
@@ -339,6 +376,7 @@ export default function MapPage() {
                     <ChatComposer
                         key="chat-composer"
                         tokens={tokens}
+                        tokenCost={tokenCost}
                         prompt={prompt}
                         onPrompt={setPrompt}
                         model={model}
@@ -354,7 +392,7 @@ export default function MapPage() {
                             setTimeout(() => window.dispatchEvent(new CustomEvent("genplace:composer:closed")), 250);
                         }}
                         canSubmit={canSubmit}
-                        cooldownLabel={`Next +1 in ${mmss(cooldownMs)}`}
+                        cooldownLabel={cooldownLabel}
                     />
                 )}
             </AnimatePresence>
@@ -374,6 +412,7 @@ export default function MapPage() {
                 model={model}
                 size={size}
                 tokens={tokens}
+                tokenCost={tokenCost}
                 variants={variants}
                 generating={generating}
                 selectedId={selectedId}
@@ -384,6 +423,8 @@ export default function MapPage() {
                 onPlace={onPlaceSelected}
                 cooldownMs={cooldownMs}
             />
+
+            {process.env.NODE_ENV !== "production" && <TokenDebugPanel />}
 
             <LoginModal open={loginOpen} onOpenChange={setLoginOpen} />
         </div>

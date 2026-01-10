@@ -1,6 +1,12 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import { applyStyle, type Style } from "@/lib/image-styles";
+import { createServerClient } from "@/lib/supabase/server";
+import {
+  consumeTokens,
+  TokenConsumeError,
+} from "@/lib/tokens/consume-tokens";
+import { MODEL_TOKEN_COST, type TokenModelId } from "@/lib/tokens/model-cost";
 
 type GenerateRequest = {
     prompt?: string;
@@ -9,6 +15,7 @@ type GenerateRequest = {
     n?: number;
     provider?: "openai" | "google" | "stability";
     modelId?: string;
+    tokenModel?: TokenModelId;
 };
 
 const ALLOWED_SIZES = new Set([24, 48, 64, 96, 128, 256, 384, 512]);
@@ -139,6 +146,7 @@ export async function POST(req: Request) {
     const size = body.size ?? 256;
     const n = Math.max(1, Math.min(4, body.n ?? 2));
     const provider = body.provider ?? "openai";
+    const tokenModel = body.tokenModel;
 
     if (!prompt) {
       return NextResponse.json(
@@ -152,6 +160,26 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+
+    if (!tokenModel || !(tokenModel in MODEL_TOKEN_COST)) {
+      return NextResponse.json(
+        { error: "Unsupported token model." },
+        { status: 400 }
+      );
+    }
+
+    const supabase = await createServerClient();
+    const { data: authData, error: authError } = await supabase.auth.getUser();
+    if (authError || !authData.user) {
+      return NextResponse.json(
+        { error: "Authentication required." },
+        { status: 401 }
+      );
+    }
+
+    // MVP: consume tokens up-front; refunds for provider failures are deferred.
+    const tokenState = await consumeTokens(authData.user.id, tokenModel);
+
         const styledPrompt = applyStyle(prompt, style);
         let variants: { id: string; url: string }[] = [];
 
@@ -186,8 +214,12 @@ export async function POST(req: Request) {
         }));
     }
 
-    return NextResponse.json({ variants });
+    return NextResponse.json({ variants, tokens: tokenState });
   } catch (err) {
+    if (err instanceof TokenConsumeError) {
+      const status = err.code === "COOLDOWN_ACTIVE" ? 429 : 402;
+      return NextResponse.json({ error: err.message, code: err.code }, { status });
+    }
     console.error("[/api/generate] error", err);
     const message =
       err instanceof Error ? err.message : "Image generation failed.";

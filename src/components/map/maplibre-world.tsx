@@ -833,7 +833,7 @@ type Props = {
     sizePx: 24 | 48 | 64 | 96 | 128 | 256 | 384 | 512;
     onCreate?: () => void;            // ⬅️ new: open prompt drawer
     hasTokens?: boolean;              // ⬅️ new: control disabled state
-    cooldownLabel?: string;           // ⬅️ new: e.g. "Out of tokens — regenerates in 2:14"
+    cooldownLabel?: string;           // ⬅️ new: e.g. "Cooldown active — 12s"
     label?: string;                   // ⬅️ new: e.g. "Create 1/5"
     generationMode?: boolean;          // ⬅️ new: whether in generation mode (affects UI)
     previewUrl?: string | null;     // ← add
@@ -847,7 +847,7 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     sizePx,
     onCreate,
     hasTokens = true,
-    cooldownLabel = "You're out of tokens — regenerates soon",
+    cooldownLabel = "You're out of tokens.",
     label = "Create",
     generationMode,
     previewUrl,

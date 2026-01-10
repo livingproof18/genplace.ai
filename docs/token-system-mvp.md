@@ -101,6 +101,123 @@ Internally, models can be grouped as:
 
 ---
 
+## Token Spend Semantics
+
+This section defines **when and how tokens are deducted** during image generation. It is critical for user trust, cost safety, and correct backend behavior.
+
+### Guiding Principle
+
+> **Tokens pay for the act of generation, not for the outcome.**
+
+Once a generation request starts, infrastructure costs are incurred. Token deduction timing reflects this reality.
+
+---
+
+### When Tokens Are Deducted
+
+**Tokens are deducted immediately when the user submits a generation request (prompt submit).**
+
+Flow:
+
+1. User selects a model (UI clearly shows token cost)
+2. User clicks **Generate**
+3. Backend validates sufficient token balance
+4. **Full token cost is deducted immediately**
+5. Image generation request starts
+
+This applies equally to 1‑token, 2‑token, and 3‑token models.
+
+---
+
+### Refund Policy (System Failures Only)
+
+Tokens are **automatically refunded** if and only if the generation fails due to a system issue.
+
+Refund conditions include:
+
+- Provider API error
+- Request timeout
+- Backend crash before image is returned
+- Any non-user-caused failure
+
+Refund conditions do **not** include:
+
+- User dissatisfaction with result
+- Prompt quality issues
+- User cancellation mid-generation
+- Successful generation (even if image is not placed)
+
+This ensures fairness without opening abuse vectors.
+
+---
+
+### UX Requirements
+
+To maintain trust and clarity, the UI must:
+
+- Always display **token cost before generation** (e.g. “Costs 2 tokens”)
+- Change button state during generation (e.g. “Generating…”)
+- Show clear feedback on failure:
+
+  - Example: “Generation failed — your tokens were refunded.”
+
+Tokens should never be deducted silently.
+
+---
+
+### Backend Implementation Pattern
+
+Recommended server-side flow:
+
+```ts
+// Validate balance
+if (user.tokens < tokenCost) {
+  throw new Error("Not enough tokens")
+}
+
+// Deduct immediately
+markTokenTransaction(userId, tokenCost, "pending")
+
+try {
+  const image = await generateImage(...)
+  commitTokenTransaction(userId, tokenCost)
+  return image
+} catch (err) {
+  refundTokenTransaction(userId, tokenCost)
+  throw err
+}
+```
+
+Token transactions should be auditable with clear states:
+
+- `pending`
+- `committed`
+- `refunded`
+
+---
+
+### Explicitly Avoided Patterns
+
+The following approaches are intentionally not used:
+
+- Partial token deduction (e.g. 1 token upfront, rest later)
+- Deducting tokens after generation completes
+- Deducting tokens on placement
+- Free retries or free regenerations
+
+These patterns increase complexity, reduce cost safety, or create user confusion.
+
+---
+
+### Summary
+
+- Tokens are deducted **at generation start**
+- Refunds occur **only on system failure**
+- Cost is always visible before action
+- This model balances user trust with infrastructure safety
+
+---
+
 ## Token Consumption Flow
 
 ### Server‑Side Logic

@@ -46,7 +46,7 @@ export function SelectionModal({
     onPrimary,
     onShare,
     canCreate,
-    disabledReason = "You're out of tokens — regenerates soon",
+    disabledReason = "You're out of tokens.",
     className,
 }: Props) {
     const { resolvedTheme } = useTheme();
