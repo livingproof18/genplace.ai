@@ -30,8 +30,10 @@ const TIPS = [
 ];
 
 const MODEL_OPTIONS = [
-    { value: "openai", label: "gpt-image-1", provider: "OpenAI", Icon: Aperture },
-    { value: "google", label: "Nano Banana", provider: "Google Gemini", Icon: Banana },
+    { value: "openai-1", label: "gpt-image-1", provider: "OpenAI", Icon: Aperture },
+    { value: "openai-1.5", label: "gpt-image-1.5", provider: "OpenAI", Icon: Aperture },
+    { value: "google-flash", label: "Nano Banana", provider: "Google Gemini", Icon: Banana },
+    { value: "google-pro", label: "Nano Banana Pro", provider: "Google Gemini", Icon: Banana },
     { value: "sdxl", label: "Stable Image Core", provider: "Stability AI", Icon: Shield },
 ] as const;
 

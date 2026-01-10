@@ -3,11 +3,12 @@ import { NextResponse } from "next/server";
 import { applyStyle, type Style } from "@/lib/image-styles";
 
 type GenerateRequest = {
-  prompt?: string;
-  style?: Style;
-  size?: number;
-  n?: number;
-  provider?: "openai" | "google" | "stability";
+    prompt?: string;
+    style?: Style;
+    size?: number;
+    n?: number;
+    provider?: "openai" | "google" | "stability";
+    modelId?: string;
 };
 
 const ALLOWED_SIZES = new Set([24, 48, 64, 96, 128, 256, 384, 512]);
@@ -81,19 +82,22 @@ function extractGeminiInlineImage(data: any) {
   return null;
 }
 
-async function generateWithGoogle(prompt: string, n: number) {
-  const apiKey = process.env.GOOGLE_AI_API_KEY;
-  if (!apiKey) {
-    throw new Error("Google API key is not configured.");
-  }
+async function generateWithGoogle(prompt: string, n: number, modelOverride?: string) {
+    const apiKey = process.env.GOOGLE_AI_API_KEY;
+    if (!apiKey) {
+        throw new Error("Google API key is not configured.");
+    }
 
-  const model = process.env.GOOGLE_IMAGE_MODEL || "gemini-2.5-flash-image";
+    const model = modelOverride || process.env.GOOGLE_IMAGE_MODEL || "gemini-2.5-flash-image";
   const endpoint =
     process.env.GOOGLE_IMAGE_ENDPOINT ||
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
   const variants: { id: string; url: string }[] = [];
-  const responseModalities = ["TEXT", "IMAGE"];
+    const responseModalities = ["TEXT", "IMAGE"];
+    const imageConfig = model.startsWith("gemini-3-pro")
+        ? { aspectRatio: "1:1", imageSize: "1K" }
+        : { aspectRatio: "1:1" };
 
   // Gemini returns images as base64 inlineData; request IMAGE modality and parallelize
   // calls to reduce latency for multiple variants (n).
@@ -101,11 +105,11 @@ async function generateWithGoogle(prompt: string, n: number) {
     const res = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: { responseModalities },
-      }),
-    });
+            body: JSON.stringify({
+                contents: [{ role: "user", parts: [{ text: prompt }] }],
+                generationConfig: { responseModalities, imageConfig },
+            }),
+        });
 
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -148,14 +152,14 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
-    const styledPrompt = applyStyle(prompt, style);
-    let variants: { id: string; url: string }[] = [];
+        const styledPrompt = applyStyle(prompt, style);
+        let variants: { id: string; url: string }[] = [];
 
-    if (provider === "google") {
-      variants = await generateWithGoogle(styledPrompt, n);
-    } else if (provider === "stability") {
-      variants = await generateWithStability(styledPrompt, n);
-    } else {
+        if (provider === "google") {
+            variants = await generateWithGoogle(styledPrompt, n, body.modelId);
+        } else if (provider === "stability") {
+            variants = await generateWithStability(styledPrompt, n);
+        } else {
       if (!process.env.OPENAI_API_KEY) {
         return NextResponse.json(
           { error: "OpenAI API key is not configured." },
@@ -165,12 +169,13 @@ export async function POST(req: Request) {
 
       const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-      const result = await client.images.generate({
-        model: "gpt-image-1",
-        prompt: styledPrompt,
-        size: toOpenAISize(),
-        n,
-      });
+            const modelId = body.modelId || "gpt-image-1";
+            const result = await client.images.generate({
+                model: modelId,
+                prompt: styledPrompt,
+                size: toOpenAISize(),
+                n,
+            });
 
       variants = (result.data || [])
         .map((img) => img.b64_json)

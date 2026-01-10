@@ -38,7 +38,7 @@ export default function MapPage() {
     // creation state shared between composer & panel
     const [prompt, setPrompt] = useState("");
     const [size, setSize] = useState<Size>(256);
-    const [model, setModel] = useState<Model>("openai");
+    const [model, setModel] = useState<Model>("openai-1");
     const [style, setStyle] = useState<Style>("auto");
     const [presetPoint, setPresetPoint] = useState<{ lat: number; lng: number } | null>(null);
 
@@ -122,11 +122,21 @@ export default function MapPage() {
 
     async function requestImages(n: number) {
         const provider =
-            model === "google"
+            model === "google-flash" || model === "google-pro"
                 ? "google"
                 : model === "sdxl"
                     ? "stability"
                     : "openai";
+        const modelId =
+            model === "openai-1.5"
+                ? "gpt-image-1.5"
+                : model === "openai-1"
+                    ? "gpt-image-1"
+                    : model === "google-pro"
+                        ? "gemini-3-pro-image-preview"
+                        : model === "google-flash"
+                            ? "gemini-2.5-flash-image"
+                            : undefined;
         const res = await fetch("/api/generate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -136,6 +146,7 @@ export default function MapPage() {
                 size,
                 n,
                 provider,
+                modelId,
             }),
         });
 
