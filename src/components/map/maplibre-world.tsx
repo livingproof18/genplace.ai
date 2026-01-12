@@ -839,6 +839,13 @@ type Props = {
     previewUrl?: string | null;     // ← add
     user?: UserStub | null;
     onLogin?: () => void;
+    onViewportChange?: (bounds: {
+        north: number;
+        south: number;
+        east: number;
+        west: number;
+        zoom: number;
+    }) => void;
 
 };
 
@@ -852,7 +859,8 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     generationMode,
     previewUrl,
     user = null,
-    onLogin
+    onLogin,
+    onViewportChange
 }: Props) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<any>(null);
@@ -860,11 +868,15 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     const center = useMemo<[number, number]>(() => [0, 20], []);
     const placementsRef = useRef<PointPlacement[]>(placements);
     const sizePxRef = useRef(sizePx);
+    const onViewportChangeRef = useRef(onViewportChange);
     // keep a ref that always contains the latest generationMode
     const generationModeRef = useRef<boolean | undefined>(generationMode);
     useEffect(() => {
         generationModeRef.current = generationMode;
     }, [generationMode]);
+    useEffect(() => {
+        onViewportChangeRef.current = onViewportChange;
+    }, [onViewportChange]);
     useEffect(() => {
         placementsRef.current = placements;
         sizePxRef.current = sizePx;
@@ -1239,6 +1251,27 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                 map.getCanvas().style.cursor = "grab";
                 map.doubleClickZoom?.disable();
                 const maplibregl = (lib as any).default ?? lib;
+
+                const emitViewport = () => {
+                    const bounds = map.getBounds?.();
+                    if (!bounds) return;
+                    onViewportChangeRef.current?.({
+                        north: bounds.getNorth(),
+                        south: bounds.getSouth(),
+                        east: bounds.getEast(),
+                        west: bounds.getWest(),
+                        zoom: map.getZoom?.() ?? 0,
+                    });
+                };
+                emitViewport();
+                map.on("moveend", emitViewport);
+                map.on("zoomend", emitViewport);
+                map.once("remove", () => {
+                    try {
+                        map.off("moveend", emitViewport);
+                        map.off("zoomend", emitViewport);
+                    } catch { }
+                });
 
                 const syncWorldPlacementsNow = () => {
                     try {

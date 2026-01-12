@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import type { PointPlacement, Size, Model } from "@/components/map/types";
 import type { Style } from "@/lib/image-styles";
@@ -9,6 +9,7 @@ import type { User } from "@supabase/supabase-js";
 import { useTokens } from "@/hooks/use-tokens";
 import { MODEL_TOKEN_COST, type TokenModelId } from "@/lib/tokens/model-cost";
 import { createBrowserClient } from "@/lib/supabase/browser";
+import { usePlacementsRealtime, type PlacementRow } from "@/lib/realtime/usePlacementsRealtime";
 import { LoginModal } from "@/components/auth/login-modal";
 import type { UserStub } from "@/components/map/top-right-controls";
 
@@ -35,6 +36,99 @@ const MapLibreWorld = dynamic(
     { ssr: false }
 );
 
+const PLACEMENT_TILE_Z = 5;
+
+type ViewportBounds = {
+    north: number;
+    south: number;
+    east: number;
+    west: number;
+    zoom: number;
+};
+
+type SlotRow = {
+    id: string;
+    z: number;
+    x: number;
+    y: number;
+};
+
+type SlotRowWithPlacement = SlotRow & {
+    current_placement_id: string | null;
+};
+
+type SlotCoords = SlotRow & {
+    lat: number;
+    lng: number;
+};
+
+function tile2lon(x: number, z: number) {
+    return (x / Math.pow(2, z)) * 360 - 180;
+}
+
+function tile2lat(y: number, z: number) {
+    const n = Math.PI - (2 * Math.PI * y) / Math.pow(2, z);
+    return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+}
+
+function lon2tile(lon: number, z: number) {
+    return Math.floor(((lon + 180) / 360) * Math.pow(2, z));
+}
+
+function lat2tile(lat: number, z: number) {
+    const rad = (lat * Math.PI) / 180;
+    return Math.floor(
+        ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) *
+        Math.pow(2, z)
+    );
+}
+
+function isSlotInViewport(slot: SlotCoords, bounds: ViewportBounds) {
+    const inLat = slot.lat >= bounds.south && slot.lat <= bounds.north;
+    const crossesDateline = bounds.east < bounds.west;
+    const inLng = crossesDateline
+        ? slot.lng >= bounds.west || slot.lng <= bounds.east
+        : slot.lng >= bounds.west && slot.lng <= bounds.east;
+    return inLat && inLng;
+}
+
+function clampTile(value: number, max: number) {
+    return Math.max(0, Math.min(max, value));
+}
+
+function tileRangesForBounds(bounds: ViewportBounds, z: number) {
+    const maxTile = Math.pow(2, z) - 1;
+    const westX = lon2tile(bounds.west, z);
+    const eastX = lon2tile(bounds.east, z);
+    const northY = lat2tile(bounds.north, z);
+    const southY = lat2tile(bounds.south, z);
+    const minY = clampTile(Math.min(northY, southY), maxTile);
+    const maxY = clampTile(Math.max(northY, southY), maxTile);
+    const crossesDateline = bounds.east < bounds.west;
+
+    if (crossesDateline) {
+        return {
+            ranges: [
+                { minX: 0, maxX: clampTile(eastX, maxTile) },
+                { minX: clampTile(westX, maxTile), maxX: maxTile },
+            ],
+            minY,
+            maxY,
+        };
+    }
+
+    return {
+        ranges: [
+            {
+                minX: clampTile(Math.min(westX, eastX), maxTile),
+                maxX: clampTile(Math.max(westX, eastX), maxTile),
+            },
+        ],
+        minY,
+        maxY,
+    };
+}
+
 export default function MapPage() {
     const { tokens, loading: tokensLoading, refreshTokens, applyTokenState } = useTokens();
     const supabase = useMemo(() => createBrowserClient(), []);
@@ -44,6 +138,11 @@ export default function MapPage() {
 
     // map placements
     const [placements, setPlacements] = useState<PointPlacement[]>([]);
+    const viewportRef = useRef<ViewportBounds | null>(null);
+    const slotCacheRef = useRef<Map<string, SlotCoords>>(new Map());
+    const [initialViewport, setInitialViewport] = useState<ViewportBounds | null>(null);
+    const initialViewportSetRef = useRef(false);
+    const [realtimeReady, setRealtimeReady] = useState(false);
 
     // creation state shared between composer & panel
     const [prompt, setPrompt] = useState("");
@@ -60,6 +159,220 @@ export default function MapPage() {
 
     // NEW: gate the ChatComposer
     const [composerOpen, setComposerOpen] = useState(false);
+    const devLog = process.env.NODE_ENV !== "production";
+    const placingRef = useRef(false);
+
+    const handleViewportChange = useCallback((bounds: ViewportBounds) => {
+        viewportRef.current = bounds;
+        if (!initialViewportSetRef.current) {
+            initialViewportSetRef.current = true;
+            setInitialViewport(bounds);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!initialViewport) return;
+        let cancelled = false;
+
+        const loadInitialPlacements = async () => {
+            try {
+                const { ranges, minY, maxY } = tileRangesForBounds(
+                    initialViewport,
+                    PLACEMENT_TILE_Z
+                );
+
+                const slotResults = await Promise.all(
+                    ranges.map((range) =>
+                        supabase
+                            .from("slots")
+                            .select("id,z,x,y,current_placement_id")
+                            .eq("z", PLACEMENT_TILE_Z)
+                            .gte("x", range.minX)
+                            .lte("x", range.maxX)
+                            .gte("y", minY)
+                            .lte("y", maxY)
+                            .returns<SlotRowWithPlacement[]>()
+                    )
+                );
+
+                const slots: SlotRowWithPlacement[] = [];
+                for (const result of slotResults) {
+                    if (result.error) {
+                        console.error("[placements] slot query failed", result.error);
+                        continue;
+                    }
+                    if (result.data) slots.push(...result.data);
+                }
+
+                if (cancelled) return;
+
+                for (const slot of slots) {
+                    const coords: SlotCoords = {
+                        id: slot.id,
+                        z: slot.z,
+                        x: slot.x,
+                        y: slot.y,
+                        lng: tile2lon(slot.x + 0.5, slot.z),
+                        lat: tile2lat(slot.y + 0.5, slot.z),
+                    };
+                    slotCacheRef.current.set(slot.id, coords);
+                }
+
+                const placementIds = Array.from(
+                    new Set(
+                        slots
+                            .map((slot) => slot.current_placement_id)
+                            .filter((id): id is string => !!id)
+                    )
+                );
+
+                if (placementIds.length === 0) {
+                    setPlacements([]);
+                    return;
+                }
+
+                const { data: placementsData, error: placementsError } = await supabase
+                    .from("placements")
+                    .select("id,slot_id,image_url,image_cdn_url,size,created_at")
+                    .in("id", placementIds)
+                    .returns<PlacementRow[]>();
+
+                if (placementsError) {
+                    console.error("[placements] placement query failed", placementsError);
+                    return;
+                }
+
+                const placementsById = new Map(
+                    (placementsData ?? []).map((placement) => [placement.id, placement])
+                );
+
+                const nextPlacements: PointPlacement[] = [];
+                for (const slot of slots) {
+                    if (!slot.current_placement_id) continue;
+                    const placement = placementsById.get(slot.current_placement_id);
+                    if (!placement) continue;
+                    const imageUrl = placement.image_url ?? placement.image_cdn_url;
+                    if (!imageUrl) continue;
+                    const coords = slotCacheRef.current.get(slot.id);
+                    if (!coords) continue;
+                    nextPlacements.push({
+                        id: slot.id,
+                        slotId: slot.id,
+                        placementId: placement.id,
+                        x: slot.x,
+                        y: slot.y,
+                        z: slot.z,
+                        url: imageUrl,
+                        lat: coords.lat,
+                        lng: coords.lng,
+                        pixelSize: typeof placement.size === "number" ? placement.size : 256,
+                        anchor: "center",
+                    });
+                }
+
+                if (!cancelled) {
+                    setPlacements(nextPlacements);
+                }
+            } finally {
+                if (!cancelled) {
+                    setRealtimeReady(true);
+                }
+            }
+        };
+
+        void loadInitialPlacements();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [initialViewport, supabase]);
+
+    const resolveSlot = useCallback(
+        async (slotId: string): Promise<SlotCoords | null> => {
+            const cached = slotCacheRef.current.get(slotId);
+            if (cached) return cached;
+
+            const { data, error } = await supabase
+                .from("slots")
+                .select("id,z,x,y")
+                .eq("id", slotId)
+                .single<SlotRow>();
+
+            if (error || !data) {
+                console.error("[realtime] slot lookup failed", error ?? "Slot not found");
+                return null;
+            }
+
+            const coords: SlotCoords = {
+                ...data,
+                lng: tile2lon(data.x + 0.5, data.z),
+                lat: tile2lat(data.y + 0.5, data.z),
+            };
+            slotCacheRef.current.set(slotId, coords);
+            return coords;
+        },
+        [supabase]
+    );
+
+    const applyRealtimePlacement = useCallback(
+        async (placement: PlacementRow) => {
+            if (!placement?.slot_id) return;
+            const slot = await resolveSlot(placement.slot_id);
+            if (!slot) return;
+
+            const bounds = viewportRef.current;
+            if (bounds && !isSlotInViewport(slot, bounds)) {
+                if (devLog) {
+                    console.log("[realtime] placement ignored (out of viewport)", placement);
+                }
+                return;
+            }
+
+            const imageUrl = placement.image_url ?? placement.image_cdn_url;
+            if (!imageUrl) return;
+
+            const pixelSize = typeof placement.size === "number" ? placement.size : 256;
+            const nextPlacement: PointPlacement = {
+                id: slot.id,
+                slotId: slot.id,
+                placementId: placement.id,
+                x: slot.x,
+                y: slot.y,
+                z: slot.z,
+                url: imageUrl,
+                lat: slot.lat,
+                lng: slot.lng,
+                pixelSize,
+                anchor: "center",
+            };
+
+            setPlacements((prev) => {
+                const next = prev.filter((p) => {
+                    if (p.slotId && p.slotId === slot.id) return false;
+                    if (p.x === slot.x && p.y === slot.y && p.z === slot.z) return false;
+                    return true;
+                });
+                return [...next, nextPlacement];
+            });
+        },
+        [resolveSlot, devLog]
+    );
+
+    const isInViewport = useCallback((placement: PlacementRow) => {
+        const bounds = viewportRef.current;
+        if (!bounds) return true;
+        const slot = slotCacheRef.current.get(placement.slot_id);
+        if (!slot) return true;
+        return isSlotInViewport(slot, bounds);
+    }, []);
+
+    usePlacementsRealtime({
+        onInsert: (placement) => {
+            void applyRealtimePlacement(placement);
+        },
+        isInViewport,
+        enabled: realtimeReady,
+    });
 
     const userStub: UserStub | null = useMemo(() => {
         if (!authUser) return null;
@@ -300,38 +613,46 @@ export default function MapPage() {
 
     async function onPlaceSelected() {
         if (!selectedId || !presetPoint) return;
+        if (placingRef.current) return;
+        placingRef.current = true;
+        setGenError(null);
 
-        // simulate place
-        await new Promise((r) => setTimeout(r, 600 + Math.random() * 600));
-        const picked = variants.find((v) => v.id === selectedId);
-        console.log("Placing image:", picked, "at", presetPoint);
-        if (!picked) return;
-
-        // add to map
-        setPlacements((prev) => [
-            ...prev.filter((q) => q.id !== picked.id),
-            {
-                id: crypto.randomUUID(),
-                url: picked.url,
-                lat: presetPoint.lat,
-                lng: presetPoint.lng,
-                pixelSize: size,
-                anchor: "center",
-            },
-        ]);
-
-        // clear persisted draft on place (user finished the prompt)
         try {
-            localStorage.removeItem(DRAFT_KEY);
-            localStorage.removeItem(DRAFT_SAVED_AT_KEY);
-        } catch { }
+            const z = PLACEMENT_TILE_Z;
+            const x = lon2tile(presetPoint.lng, z);
+            const y = lat2tile(presetPoint.lat, z);
+            const res = await fetch("/api/place", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ generationId: selectedId, z, x, y }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                const message = data?.error || "Placement failed.";
+                throw new Error(message);
+            }
 
-        // close panel & clear selection (keep prompt for quick re-run)
-        setPanelOpen(false);
-        setSelectedId(null);
+            // clear persisted draft on place (user finished the prompt)
+            try {
+                localStorage.removeItem(DRAFT_KEY);
+                localStorage.removeItem(DRAFT_SAVED_AT_KEY);
+            } catch { }
 
-        // cleanup ghost preview
-        window.dispatchEvent(new CustomEvent("genplace:preview:clear"));
+            // close panel & clear selection (keep prompt for quick re-run)
+            setPanelOpen(false);
+            setSelectedId(null);
+
+            // cleanup ghost preview
+            window.dispatchEvent(new CustomEvent("genplace:preview:clear"));
+        } catch (err) {
+            if (err instanceof Error) {
+                setGenError(err.message);
+            } else {
+                setGenError("Placement failed.");
+            }
+        } finally {
+            placingRef.current = false;
+        }
     }
 
     return (
@@ -349,6 +670,7 @@ export default function MapPage() {
                 previewUrl={selectedId ? variants.find(v => v.id === selectedId)?.url || null : null}
                 user={userStub}
                 onLogin={() => setLoginOpen(true)}
+                onViewportChange={handleViewportChange}
 
             />
 

@@ -5,6 +5,14 @@ export type PointPlacement = {
   lat: number;
   lng: number;
   pixelSize?: number; // optional: desired pixel size for the icon (default 256)
+  slotId?: string;
+  placementId?: string;
+  x?: number;
+  y?: number;
+  z?: number;
+  prompt?: string;
+  size?: number;
+  placedAt?: string;
   anchor?:
     | "center"
     | "bottom"
@@ -15,6 +23,17 @@ export type PointPlacement = {
     | "bottom-right"
     | "top-left"
     | "top-right";
+};
+
+export type GridPlacement = {
+  id: string;
+  url: string;
+  z: number;
+  x: number;
+  y: number;
+  prompt: string;
+  size: number;
+  placedAt: string;
 };
 
 export type Model =

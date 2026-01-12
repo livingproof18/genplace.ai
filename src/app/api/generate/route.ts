@@ -2,6 +2,8 @@ import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import { applyStyle, type Style } from "@/lib/image-styles";
 import { createServerClient } from "@/lib/supabase/server";
+import { createGenerationRequest } from "@/lib/generation/create-generation";
+import { markApproved } from "@/lib/generation/update-generation";
 import {
   consumeTokens,
   TokenConsumeError,
@@ -214,7 +216,20 @@ export async function POST(req: Request) {
         }));
     }
 
-    return NextResponse.json({ variants, tokens: tokenState });
+    const storedVariants = await Promise.all(
+      variants.map(async (variant) => {
+        const generation = await createGenerationRequest({
+          userId: authData.user.id,
+          prompt,
+          model: tokenModel,
+          size,
+        });
+        const approved = await markApproved(generation.id, variant.url);
+        return { id: approved.id, url: variant.url };
+      })
+    );
+
+    return NextResponse.json({ variants: storedVariants, tokens: tokenState });
   } catch (err) {
     if (err instanceof TokenConsumeError) {
       const status = err.code === "COOLDOWN_ACTIVE" ? 429 : 402;
