@@ -12,7 +12,7 @@ type GenerationRequestRow = {
   status: "queued" | "generating" | "approved" | "rejected" | "failed";
   token_cost: number;
   image_url: string | null;
-  rejection_reason: string | null;
+  moderation_reason: string | null;
   error_message: string | null;
   created_at: string;
   updated_at: string;

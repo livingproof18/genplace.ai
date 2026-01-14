@@ -4,6 +4,7 @@ import { applyStyle, type Style } from "@/lib/image-styles";
 import { createServerClient } from "@/lib/supabase/server";
 import { createGenerationRequest } from "@/lib/generation/create-generation";
 import { markApproved } from "@/lib/generation/update-generation";
+import { uploadImage } from "@/lib/storage/upload-image";
 import {
   consumeTokens,
   TokenConsumeError,
@@ -25,6 +26,29 @@ const ALLOWED_SIZES = new Set([24, 48, 64, 96, 128, 256, 384, 512]);
 function toOpenAISize(): "1024x1024" {
   // gpt-image-1 defaults to 1024x1024; use that for compatibility.
   return "1024x1024";
+}
+
+function parseBase64Image(dataUrl: string) {
+  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) {
+    throw new Error("Unsupported image data format.");
+  }
+  const [, contentType, data] = match;
+  return { contentType, buffer: Buffer.from(data, "base64") };
+}
+
+function extensionFromContentType(contentType: string) {
+  switch (contentType) {
+    case "image/webp":
+      return "webp";
+    case "image/png":
+      return "png";
+    case "image/jpeg":
+    case "image/jpg":
+      return "jpg";
+    default:
+      throw new Error(`Unsupported image content type: ${contentType}`);
+  }
 }
 
 function stabilityEndpoint() {
@@ -224,8 +248,14 @@ export async function POST(req: Request) {
           model: tokenModel,
           size,
         });
-        const approved = await markApproved(generation.id, variant.url);
-        return { id: approved.id, url: variant.url };
+
+        const { buffer, contentType } = parseBase64Image(variant.url);
+        const extension = extensionFromContentType(contentType);
+        const key = `raw/${generation.id}.${extension}`;
+        const imageUrl = await uploadImage({ buffer, key, contentType });
+        const approved = await markApproved(generation.id, imageUrl);
+
+        return { id: approved.id, url: imageUrl };
       })
     );
 

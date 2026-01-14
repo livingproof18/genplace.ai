@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { createServerClient } from "@/lib/supabase/server";
 import { createGenerationRequest } from "@/lib/generation/create-generation";
 import {
@@ -6,6 +8,7 @@ import {
   markFailed,
   markGenerating,
 } from "@/lib/generation/update-generation";
+import { uploadImage } from "@/lib/storage/upload-image";
 import {
   consumeTokens,
   TokenConsumeError,
@@ -25,9 +28,12 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function placeholderUrl(size: number) {
-  const label = encodeURIComponent("GenPlace");
-  return `https://placehold.co/${size}x${size}/png?text=${label}`;
+const PLACEHOLDER_FILENAME = "convex-approval.png";
+const PLACEHOLDER_CONTENT_TYPE = "image/png";
+
+async function loadPlaceholderImage() {
+  const filePath = path.join(process.cwd(), "public", PLACEHOLDER_FILENAME);
+  return readFile(filePath);
 }
 
 export async function POST(req: Request) {
@@ -83,10 +89,14 @@ export async function POST(req: Request) {
     await markGenerating(generation.id);
     await sleep(500 + Math.random() * 500);
 
-    const approved = await markApproved(
-      generation.id,
-      placeholderUrl(size)
-    );
+    const buffer = await loadPlaceholderImage();
+    const key = `raw/${generation.id}.png`;
+    const imageUrl = await uploadImage({
+      buffer,
+      key,
+      contentType: PLACEHOLDER_CONTENT_TYPE,
+    });
+    const approved = await markApproved(generation.id, imageUrl);
 
     return NextResponse.json({ generation: approved });
   } catch (err) {

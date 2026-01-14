@@ -6,7 +6,6 @@ export type PlacementRow = {
   id: string;
   slot_id: string;
   image_url?: string | null;
-  image_cdn_url?: string | null;
   created_at?: string;
   size?: number;
   [key: string]: unknown;

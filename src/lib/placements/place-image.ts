@@ -15,6 +15,8 @@ type GenerationRequestRow = {
   user_id: string;
   status: "queued" | "generating" | "approved" | "rejected" | "failed";
   image_url: string | null;
+  prompt: string;
+  size: number;
 };
 
 type SlotRow = {
@@ -129,7 +131,7 @@ export async function placeImage({
   const supabase = createAdminClient();
   const { data: generation, error: generationError } = await supabase
     .from("generation_requests")
-    .select("id,user_id,status,image_url")
+    .select("id,user_id,status,image_url,prompt,size")
     .eq("id", generationId)
     .single<GenerationRequestRow>();
 
@@ -173,6 +175,8 @@ export async function placeImage({
       slot_id: slot.id,
       user_id: userId,
       generation_id: generationId,
+      prompt: generation.prompt,
+      size: generation.size,
       image_url: generation.image_url,
     })
     .select("*")

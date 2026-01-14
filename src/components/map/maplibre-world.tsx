@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 const TILE_ZOOM = 5;
 const STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 // ----------------
+const devLog = process.env.NODE_ENV !== "production";
 // === Checkpoint spec constants (MapLibre/GL) ===
 const TILE_SIZE = 256;                 // your canvas/generation tile size
 const MIN_INTERACT_ZOOM = 11.0;        // block tagging below this
@@ -605,11 +606,31 @@ function buildGridGeoJSON(map: any, mercator: any, gridPx: number, zoomRef: numb
     return { type: "FeatureCollection", features };
 }
 
+const worldImageSeq = new Map<string, number>();
+
+async function preloadWorldImage(url: string, id: string) {
+    if (devLog) {
+        console.log("[map] preload image start", { id, url });
+    }
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    const loaded = new Promise<HTMLImageElement>((resolve, reject) => {
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error(`Image preload failed: ${url}`));
+    });
+    img.src = url;
+    const result = await loaded;
+    if (devLog) {
+        console.log("[map] preload image finish", { id, url });
+    }
+    return result;
+}
+
 /**
  * Add or update a persistent raster image layer that scales
  * perfectly with zoom — like wplace.
  */
-function ensureWorldImage(
+async function ensureWorldImage(
     map: any,
     id: string,
     url: string,
@@ -618,14 +639,38 @@ function ensureWorldImage(
     pixelSize = 256,
     mercator?: any
 ) {
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) return;
+    if (!Number.isFinite(pixelSize) || pixelSize <= 0) return;
+
     const coords = fixedWorldBounds(mercator, lng, lat, pixelSize);
     if (!coords) return;
+    if (coords.some((pt) => !Number.isFinite(pt[0]) || !Number.isFinite(pt[1]))) return;
+
+    const seq = (worldImageSeq.get(id) ?? 0) + 1;
+    worldImageSeq.set(id, seq);
+
+    try {
+        await preloadWorldImage(url, id);
+    } catch (err) {
+        if (devLog) {
+            console.warn("[map] preload image failed", { id, url, err });
+        }
+        return;
+    }
+
+    if (worldImageSeq.get(id) !== seq) return;
+    if (!map?.isStyleLoaded?.()) return;
 
     // Update if exists
     if (map.getSource(id)) {
         const src: any = map.getSource(id);
         if (typeof src.updateImage === "function") {
-            src.updateImage({ url, coordinates: coords });
+            if (devLog) {
+                console.log("[map] update image source", { id, url });
+            }
+            try {
+                src.updateImage({ url, coordinates: coords });
+            } catch { }
             return;
         }
         // Fallback: remove and re-add if updateImage is not supported.
@@ -636,31 +681,40 @@ function ensureWorldImage(
     }
 
     // Create new source + layer
-    map.addSource(id, {
-        type: "image",
-        url,
-        coordinates: coords,
-    });
+    if (devLog) {
+        console.log("[map] add image source", { id, url });
+    }
+    try {
+        map.addSource(id, {
+            type: "image",
+            url,
+            coordinates: coords,
+        });
 
-    map.addLayer({
-        id,
-        type: "raster",
-        source: id,
-        minzoom: TILES_VISIBLE_ZOOM,
-        paint: { "raster-opacity": 1 },
-    });
+        map.addLayer({
+            id,
+            type: "raster",
+            source: id,
+            minzoom: TILES_VISIBLE_ZOOM,
+            paint: { "raster-opacity": 1 },
+        });
+    } catch { }
 }
 
 /**
  * Keep all placements synchronized and stable across re-renders.
  */
-function syncWorldPlacements(map: any, placements: PointPlacement[], defaultPixelSize: number, mercator?: any) {
+async function syncWorldPlacements(map: any, placements: PointPlacement[], defaultPixelSize: number, mercator?: any) {
     if (!map || !map.isStyleLoaded?.() || !mercator?.fromLngLat) return;
+    if (devLog) {
+        console.log("[map] syncWorldPlacements", { count: placements.length });
+    }
     const seen = new Set<string>();
+    const tasks: Promise<void>[] = [];
 
     for (const p of placements) {
         const id = `gp_raster_${p.id}`;
-        ensureWorldImage(map, id, p.url, p.lng, p.lat, p.pixelSize ?? defaultPixelSize, mercator);
+        tasks.push(ensureWorldImage(map, id, p.url, p.lng, p.lat, p.pixelSize ?? defaultPixelSize, mercator));
         seen.add(id);
     }
 
@@ -672,11 +726,14 @@ function syncWorldPlacements(map: any, placements: PointPlacement[], defaultPixe
         const id = layer.id;
         if (id.startsWith("gp_raster_") && !seen.has(id)) {
             try {
+                worldImageSeq.delete(id);
                 if (map.getLayer(id)) map.removeLayer(id);
                 if (map.getSource(id)) map.removeSource(id);
             } catch { /* ignore cleanup errors */ }
         }
     }
+
+    await Promise.all(tasks);
 }
 
 
@@ -1274,11 +1331,14 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                 });
 
                 const syncWorldPlacementsNow = () => {
-                    try {
-                        syncWorldPlacements(map, placementsRef.current, sizePxRef.current, mercatorRef.current);
-                    } catch (e) {
+                    void syncWorldPlacements(
+                        map,
+                        placementsRef.current,
+                        sizePxRef.current,
+                        mercatorRef.current
+                    ).catch((e) => {
                         console.error("syncWorldPlacements  error", e);
-                    }
+                    });
                 };
                 syncWorldPlacementsNow();
                 map.on("style.load", syncWorldPlacementsNow);
@@ -1593,11 +1653,9 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
 
         const run = () => {
             if (!map.isStyleLoaded?.()) return;
-            try {
-                syncWorldPlacements(map, placements, sizePx, mercatorRef.current);
-            } catch (e) {
+            void syncWorldPlacements(map, placements, sizePx, mercatorRef.current).catch((e) => {
                 console.error("syncWorldPlacements  error", e);
-            }
+            });
         };
 
         if (map.isStyleLoaded?.()) {

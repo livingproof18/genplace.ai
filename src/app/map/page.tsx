@@ -84,11 +84,15 @@ function lat2tile(lat: number, z: number) {
 }
 
 function isSlotInViewport(slot: SlotCoords, bounds: ViewportBounds) {
-    const inLat = slot.lat >= bounds.south && slot.lat <= bounds.north;
+    const west = tile2lon(slot.x, slot.z);
+    const east = tile2lon(slot.x + 1, slot.z);
+    const north = tile2lat(slot.y, slot.z);
+    const south = tile2lat(slot.y + 1, slot.z);
+    const inLat = south <= bounds.north && north >= bounds.south;
     const crossesDateline = bounds.east < bounds.west;
     const inLng = crossesDateline
-        ? slot.lng >= bounds.west || slot.lng <= bounds.east
-        : slot.lng >= bounds.west && slot.lng <= bounds.east;
+        ? east >= bounds.west || west <= bounds.east
+        : east >= bounds.west && west <= bounds.east;
     return inLat && inLng;
 }
 
@@ -233,13 +237,20 @@ export default function MapPage() {
 
                 const { data: placementsData, error: placementsError } = await supabase
                     .from("placements")
-                    .select("id,slot_id,image_url,image_cdn_url,size,created_at")
+                    .select("id,slot_id,image_url,size,created_at")
                     .in("id", placementIds)
                     .returns<PlacementRow[]>();
 
                 if (placementsError) {
                     console.error("[placements] placement query failed", placementsError);
                     return;
+                }
+
+                if (devLog) {
+                    console.log("[placements] loaded placements", {
+                        count: placementsData?.length ?? 0,
+                        firstImageUrl: placementsData?.[0]?.image_url ?? null,
+                    });
                 }
 
                 const placementsById = new Map(
@@ -251,7 +262,7 @@ export default function MapPage() {
                     if (!slot.current_placement_id) continue;
                     const placement = placementsById.get(slot.current_placement_id);
                     if (!placement) continue;
-                    const imageUrl = placement.image_url ?? placement.image_cdn_url;
+                    const imageUrl = placement.image_url;
                     if (!imageUrl) continue;
                     const coords = slotCacheRef.current.get(slot.id);
                     if (!coords) continue;
@@ -267,6 +278,12 @@ export default function MapPage() {
                         lng: coords.lng,
                         pixelSize: typeof placement.size === "number" ? placement.size : 256,
                         anchor: "center",
+                    });
+                }
+
+                if (devLog) {
+                    console.log("[placements] nextPlacements", {
+                        count: nextPlacements.length,
                     });
                 }
 
@@ -328,7 +345,7 @@ export default function MapPage() {
                 return;
             }
 
-            const imageUrl = placement.image_url ?? placement.image_cdn_url;
+            const imageUrl = placement.image_url;
             if (!imageUrl) return;
 
             const pixelSize = typeof placement.size === "number" ? placement.size : 256;
