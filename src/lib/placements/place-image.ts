@@ -5,9 +5,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 type PlaceImageParams = {
   userId: string;
   generationId: string;
-  z: number;
-  x: number;
-  y: number;
+  lat: number;
+  lng: number;
 };
 
 type GenerationRequestRow = {
@@ -19,21 +18,14 @@ type GenerationRequestRow = {
   size: number;
 };
 
-type SlotRow = {
-  id: string;
-  z: number;
-  x: number;
-  y: number;
-  current_placement_id: string | null;
-  version: number;
-};
-
 type PlacementRow = {
   id: string;
-  slot_id: string;
+  slot_id: string | null;
   user_id: string;
   generation_id: string;
   image_url: string;
+  lat: number | null;
+  lng: number | null;
   created_at: string;
 };
 
@@ -56,66 +48,12 @@ export class PlacementRequestError extends Error {
   }
 }
 
-const SLOT_SELECT = "id,z,x,y,current_placement_id,version";
-
-async function resolveSlot(
-  supabase: ReturnType<typeof createAdminClient>,
-  z: number,
-  x: number,
-  y: number
-) {
-  const { data: existing, error: existingError } = await supabase
-    .from("slots")
-    .select(SLOT_SELECT)
-    .eq("z", z)
-    .eq("x", x)
-    .eq("y", y)
-    .maybeSingle<SlotRow>();
-
-  if (existingError) {
-    throw existingError;
-  }
-
-  if (existing) {
-    return existing;
-  }
-
-  const { data: created, error: createError } = await supabase
-    .from("slots")
-    .insert({ z, x, y, version: 0 })
-    .select(SLOT_SELECT)
-    .single<SlotRow>();
-
-  if (!createError) {
-    return created;
-  }
-
-  if (createError.code === "23505") {
-    const { data: retry, error: retryError } = await supabase
-      .from("slots")
-      .select(SLOT_SELECT)
-      .eq("z", z)
-      .eq("x", x)
-      .eq("y", y)
-      .maybeSingle<SlotRow>();
-
-    if (retryError) {
-      throw retryError;
-    }
-    if (retry) {
-      return retry;
-    }
-  }
-
-  throw createError;
-}
 
 export async function placeImage({
   userId,
   generationId,
-  z,
-  x,
-  y,
+  lat,
+  lng,
 }: PlaceImageParams) {
   if (!userId) {
     throw new PlacementRequestError("User is required.", 400, "USER_REQUIRED");
@@ -167,17 +105,32 @@ export async function placeImage({
     );
   }
 
-  const slot = await resolveSlot(supabase, z, x, y);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    throw new PlacementRequestError(
+      "Valid lat/lng are required.",
+      400,
+      "INVALID_COORDINATE"
+    );
+  }
+
+  const geom = `SRID=4326;POINT(${lng} ${lat})`;
+
+  if (process.env.NODE_ENV !== "production") {
+    console.log("[placeImage] insert placement", { generationId, userId, lat, lng });
+  }
 
   const { data: placement, error: placementError } = await supabase
     .from("placements")
     .insert({
-      slot_id: slot.id,
+      slot_id: null,
       user_id: userId,
       generation_id: generationId,
       prompt: generation.prompt,
       size: generation.size,
       image_url: generation.image_url,
+      lat,
+      lng,
+      geom,
     })
     .select("*")
     .single<PlacementRow>();
@@ -186,24 +139,5 @@ export async function placeImage({
     throw placementError ?? new Error("Failed to create placement.");
   }
 
-  const { data: updatedSlot, error: updateError } = await supabase
-    .from("slots")
-    .update({
-      current_placement_id: placement.id,
-      version: slot.version + 1,
-    })
-    .eq("id", slot.id)
-    .eq("version", slot.version)
-    .select(SLOT_SELECT)
-    .maybeSingle<SlotRow>();
-
-  if (updateError || !updatedSlot) {
-    await supabase.from("placements").delete().eq("id", placement.id);
-    if (updateError) {
-      throw updateError;
-    }
-    throw new PlacementConflictError();
-  }
-
-  return { placement, slot: updatedSlot };
+  return { placement };
 }

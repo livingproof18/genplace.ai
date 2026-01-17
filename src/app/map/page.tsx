@@ -36,8 +36,6 @@ const MapLibreWorld = dynamic(
     { ssr: false }
 );
 
-const PLACEMENT_TILE_Z = 5;
-
 type ViewportBounds = {
     north: number;
     south: number;
@@ -46,91 +44,13 @@ type ViewportBounds = {
     zoom: number;
 };
 
-type SlotRow = {
-    id: string;
-    z: number;
-    x: number;
-    y: number;
-};
-
-type SlotRowWithPlacement = SlotRow & {
-    current_placement_id: string | null;
-};
-
-type SlotCoords = SlotRow & {
-    lat: number;
-    lng: number;
-};
-
-function tile2lon(x: number, z: number) {
-    return (x / Math.pow(2, z)) * 360 - 180;
-}
-
-function tile2lat(y: number, z: number) {
-    const n = Math.PI - (2 * Math.PI * y) / Math.pow(2, z);
-    return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
-}
-
-function lon2tile(lon: number, z: number) {
-    return Math.floor(((lon + 180) / 360) * Math.pow(2, z));
-}
-
-function lat2tile(lat: number, z: number) {
-    const rad = (lat * Math.PI) / 180;
-    return Math.floor(
-        ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) *
-        Math.pow(2, z)
-    );
-}
-
-function isSlotInViewport(slot: SlotCoords, bounds: ViewportBounds) {
-    const west = tile2lon(slot.x, slot.z);
-    const east = tile2lon(slot.x + 1, slot.z);
-    const north = tile2lat(slot.y, slot.z);
-    const south = tile2lat(slot.y + 1, slot.z);
-    const inLat = south <= bounds.north && north >= bounds.south;
+function isPointInViewport(lat: number, lng: number, bounds: ViewportBounds) {
+    const inLat = lat >= bounds.south && lat <= bounds.north;
     const crossesDateline = bounds.east < bounds.west;
     const inLng = crossesDateline
-        ? east >= bounds.west || west <= bounds.east
-        : east >= bounds.west && west <= bounds.east;
+        ? lng >= bounds.west || lng <= bounds.east
+        : lng >= bounds.west && lng <= bounds.east;
     return inLat && inLng;
-}
-
-function clampTile(value: number, max: number) {
-    return Math.max(0, Math.min(max, value));
-}
-
-function tileRangesForBounds(bounds: ViewportBounds, z: number) {
-    const maxTile = Math.pow(2, z) - 1;
-    const westX = lon2tile(bounds.west, z);
-    const eastX = lon2tile(bounds.east, z);
-    const northY = lat2tile(bounds.north, z);
-    const southY = lat2tile(bounds.south, z);
-    const minY = clampTile(Math.min(northY, southY), maxTile);
-    const maxY = clampTile(Math.max(northY, southY), maxTile);
-    const crossesDateline = bounds.east < bounds.west;
-
-    if (crossesDateline) {
-        return {
-            ranges: [
-                { minX: 0, maxX: clampTile(eastX, maxTile) },
-                { minX: clampTile(westX, maxTile), maxX: maxTile },
-            ],
-            minY,
-            maxY,
-        };
-    }
-
-    return {
-        ranges: [
-            {
-                minX: clampTile(Math.min(westX, eastX), maxTile),
-                maxX: clampTile(Math.max(westX, eastX), maxTile),
-            },
-        ],
-        minY,
-        maxY,
-    };
 }
 
 export default function MapPage() {
@@ -143,7 +63,6 @@ export default function MapPage() {
     // map placements
     const [placements, setPlacements] = useState<PointPlacement[]>([]);
     const viewportRef = useRef<ViewportBounds | null>(null);
-    const slotCacheRef = useRef<Map<string, SlotCoords>>(new Map());
     const [initialViewport, setInitialViewport] = useState<ViewportBounds | null>(null);
     const initialViewportSetRef = useRef(false);
     const [realtimeReady, setRealtimeReady] = useState(false);
@@ -154,6 +73,7 @@ export default function MapPage() {
     const [model, setModel] = useState<Model>("openai-1");
     const [style, setStyle] = useState<Style>("auto");
     const [presetPoint, setPresetPoint] = useState<{ lat: number; lng: number } | null>(null);
+    const selectedPointRef = useRef<{ lat: number; lng: number } | null>(null);
 
     const [generating, setGenerating] = useState(false);
     const [variants, setVariants] = useState<Variant[]>([]);
@@ -165,6 +85,17 @@ export default function MapPage() {
     const [composerOpen, setComposerOpen] = useState(false);
     const devLog = process.env.NODE_ENV !== "production";
     const placingRef = useRef(false);
+
+    const parsePoint = (d: any) => {
+        const lat =
+            typeof d?.lat === "string" ? Number.parseFloat(d.lat) : d?.lat;
+        const lng =
+            typeof d?.lng === "string" ? Number.parseFloat(d.lng) : d?.lng;
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+            return null;
+        }
+        return { lat: lat as number, lng: lng as number };
+    };
 
     const handleViewportChange = useCallback((bounds: ViewportBounds) => {
         viewportRef.current = bounds;
@@ -180,65 +111,24 @@ export default function MapPage() {
 
         const loadInitialPlacements = async () => {
             try {
-                const { ranges, minY, maxY } = tileRangesForBounds(
-                    initialViewport,
-                    PLACEMENT_TILE_Z
-                );
-
-                const slotResults = await Promise.all(
-                    ranges.map((range) =>
-                        supabase
-                            .from("slots")
-                            .select("id,z,x,y,current_placement_id")
-                            .eq("z", PLACEMENT_TILE_Z)
-                            .gte("x", range.minX)
-                            .lte("x", range.maxX)
-                            .gte("y", minY)
-                            .lte("y", maxY)
-                            .returns<SlotRowWithPlacement[]>()
-                    )
-                );
-
-                const slots: SlotRowWithPlacement[] = [];
-                for (const result of slotResults) {
-                    if (result.error) {
-                        console.error("[placements] slot query failed", result.error);
-                        continue;
-                    }
-                    if (result.data) slots.push(...result.data);
-                }
-
-                if (cancelled) return;
-
-                for (const slot of slots) {
-                    const coords: SlotCoords = {
-                        id: slot.id,
-                        z: slot.z,
-                        x: slot.x,
-                        y: slot.y,
-                        lng: tile2lon(slot.x + 0.5, slot.z),
-                        lat: tile2lat(slot.y + 0.5, slot.z),
-                    };
-                    slotCacheRef.current.set(slot.id, coords);
-                }
-
-                const placementIds = Array.from(
-                    new Set(
-                        slots
-                            .map((slot) => slot.current_placement_id)
-                            .filter((id): id is string => !!id)
-                    )
-                );
-
-                if (placementIds.length === 0) {
-                    setPlacements([]);
-                    return;
-                }
-
-                const { data: placementsData, error: placementsError } = await supabase
+                const crossesDateline = initialViewport.east < initialViewport.west;
+                let placementQuery = supabase
                     .from("placements")
-                    .select("id,slot_id,image_url,size,created_at")
-                    .in("id", placementIds)
+                    .select("id,image_url,size,created_at,lat,lng,prompt")
+                    .gte("lat", initialViewport.south)
+                    .lte("lat", initialViewport.north);
+
+                if (crossesDateline) {
+                    placementQuery = placementQuery.or(
+                        `lng.gte.${initialViewport.west},lng.lte.${initialViewport.east}`
+                    );
+                } else {
+                    placementQuery = placementQuery
+                        .gte("lng", initialViewport.west)
+                        .lte("lng", initialViewport.east);
+                }
+
+                const { data: placementsData, error: placementsError } = await placementQuery
                     .returns<PlacementRow[]>();
 
                 if (placementsError) {
@@ -250,34 +140,32 @@ export default function MapPage() {
                     console.log("[placements] loaded placements", {
                         count: placementsData?.length ?? 0,
                         firstImageUrl: placementsData?.[0]?.image_url ?? null,
+                        firstLatLng: placementsData?.[0]
+                            ? { lat: placementsData?.[0]?.lat, lng: placementsData?.[0]?.lng }
+                            : null,
                     });
                 }
-
-                const placementsById = new Map(
-                    (placementsData ?? []).map((placement) => [placement.id, placement])
-                );
-
                 const nextPlacements: PointPlacement[] = [];
-                for (const slot of slots) {
-                    if (!slot.current_placement_id) continue;
-                    const placement = placementsById.get(slot.current_placement_id);
-                    if (!placement) continue;
+                for (const placement of placementsData ?? []) {
                     const imageUrl = placement.image_url;
                     if (!imageUrl) continue;
-                    const coords = slotCacheRef.current.get(slot.id);
-                    if (!coords) continue;
+                    if (!Number.isFinite(placement.lat) || !Number.isFinite(placement.lng)) {
+                        if (devLog) {
+                            console.warn("[placements] missing lat/lng", placement);
+                        }
+                        continue;
+                    }
                     nextPlacements.push({
-                        id: slot.id,
-                        slotId: slot.id,
+                        id: placement.id,
                         placementId: placement.id,
-                        x: slot.x,
-                        y: slot.y,
-                        z: slot.z,
                         url: imageUrl,
-                        lat: coords.lat,
-                        lng: coords.lng,
+                        lat: placement.lat as number,
+                        lng: placement.lng as number,
                         pixelSize: typeof placement.size === "number" ? placement.size : 256,
                         anchor: "center",
+                        prompt: typeof placement.prompt === "string" ? placement.prompt : undefined,
+                        size: typeof placement.size === "number" ? placement.size : undefined,
+                        placedAt: placement.created_at,
                     });
                 }
 
@@ -304,41 +192,17 @@ export default function MapPage() {
         };
     }, [initialViewport, supabase]);
 
-    const resolveSlot = useCallback(
-        async (slotId: string): Promise<SlotCoords | null> => {
-            const cached = slotCacheRef.current.get(slotId);
-            if (cached) return cached;
-
-            const { data, error } = await supabase
-                .from("slots")
-                .select("id,z,x,y")
-                .eq("id", slotId)
-                .single<SlotRow>();
-
-            if (error || !data) {
-                console.error("[realtime] slot lookup failed", error ?? "Slot not found");
-                return null;
-            }
-
-            const coords: SlotCoords = {
-                ...data,
-                lng: tile2lon(data.x + 0.5, data.z),
-                lat: tile2lat(data.y + 0.5, data.z),
-            };
-            slotCacheRef.current.set(slotId, coords);
-            return coords;
-        },
-        [supabase]
-    );
-
     const applyRealtimePlacement = useCallback(
         async (placement: PlacementRow) => {
-            if (!placement?.slot_id) return;
-            const slot = await resolveSlot(placement.slot_id);
-            if (!slot) return;
+            if (!Number.isFinite(placement.lat) || !Number.isFinite(placement.lng)) {
+                if (devLog) {
+                    console.warn("[realtime] placement missing lat/lng", placement);
+                }
+                return;
+            }
 
             const bounds = viewportRef.current;
-            if (bounds && !isSlotInViewport(slot, bounds)) {
+            if (bounds && !isPointInViewport(placement.lat as number, placement.lng as number, bounds)) {
                 if (devLog) {
                     console.log("[realtime] placement ignored (out of viewport)", placement);
                 }
@@ -350,37 +214,38 @@ export default function MapPage() {
 
             const pixelSize = typeof placement.size === "number" ? placement.size : 256;
             const nextPlacement: PointPlacement = {
-                id: slot.id,
-                slotId: slot.id,
+                id: placement.id,
                 placementId: placement.id,
-                x: slot.x,
-                y: slot.y,
-                z: slot.z,
                 url: imageUrl,
-                lat: slot.lat,
-                lng: slot.lng,
+                lat: placement.lat as number,
+                lng: placement.lng as number,
                 pixelSize,
                 anchor: "center",
             };
 
-            setPlacements((prev) => {
-                const next = prev.filter((p) => {
-                    if (p.slotId && p.slotId === slot.id) return false;
-                    if (p.x === slot.x && p.y === slot.y && p.z === slot.z) return false;
-                    return true;
+            if (devLog) {
+                console.log("[realtime] render placement", {
+                    id: placement.id,
+                    lat: placement.lat,
+                    lng: placement.lng,
                 });
+            }
+
+            setPlacements((prev) => {
+                const next = prev.filter((p) => p.id !== placement.id);
                 return [...next, nextPlacement];
             });
         },
-        [resolveSlot, devLog]
+        [devLog]
     );
 
     const isInViewport = useCallback((placement: PlacementRow) => {
         const bounds = viewportRef.current;
         if (!bounds) return true;
-        const slot = slotCacheRef.current.get(placement.slot_id);
-        if (!slot) return true;
-        return isSlotInViewport(slot, bounds);
+        if (!Number.isFinite(placement.lat) || !Number.isFinite(placement.lng)) {
+            return true;
+        }
+        return isPointInViewport(placement.lat as number, placement.lng as number, bounds);
     }, []);
 
     usePlacementsRealtime({
@@ -441,10 +306,17 @@ export default function MapPage() {
         const onOpenCreate = (e: any) => {
             // If detail has coords, use them as the presetPoint (tile-first create).
             const d = e?.detail;
-            if (d && typeof d.lat === "number" && typeof d.lng === "number") {
-                setPresetPoint({ lat: d.lat, lng: d.lng });
+            const point = parsePoint(d);
+            if (point) {
+                setPresetPoint(point);
+                selectedPointRef.current = point;
             } else {
                 setPresetPoint(null);
+                selectedPointRef.current = null;
+            }
+
+            if (devLog) {
+                console.log("[place] genplace:create detail", d);
             }
 
             // Always open the composer for this event (this is the explicit "Create" action).
@@ -466,12 +338,23 @@ export default function MapPage() {
         const onPoint = (e: any) => {
             const d = e?.detail;
             if (!d) return;
+            const point = parsePoint(d);
+            if (!point) {
+                if (devLog) {
+                    console.warn("[place] invalid point detail", d);
+                }
+                return;
+            }
 
             // Only set the presetPoint so GenerationPanel gets hasPoint={true}.
-            setPresetPoint({ lat: d.lat, lng: d.lng });
+            setPresetPoint(point);
+            selectedPointRef.current = point;
 
             // IMPORTANT: do NOT open the composer here. Map clicks should only show the SelectionModal.
             // If composer is already open, we intentionally leave it as-is (so the user can keep typing).
+            if (devLog) {
+                console.log("[place] genplace:create:point detail", d);
+            }
         };
 
         window.addEventListener("genplace:create:point", onPoint as any);
@@ -629,19 +512,48 @@ export default function MapPage() {
     }
 
     async function onPlaceSelected() {
-        if (!selectedId || !presetPoint) return;
+        const point = selectedPointRef.current ?? presetPoint;
+        if (!selectedId || !point) {
+            if (devLog) {
+                console.warn("[place] missing placement point", {
+                    selectedId,
+                    presetPoint,
+                    selectedPointRef: selectedPointRef.current,
+                });
+            }
+            return;
+        }
         if (placingRef.current) return;
         placingRef.current = true;
         setGenError(null);
 
         try {
-            const z = PLACEMENT_TILE_Z;
-            const x = lon2tile(presetPoint.lng, z);
-            const y = lat2tile(presetPoint.lat, z);
+            if (devLog) {
+                console.log("[place] submit request", {
+                    generationId: selectedId,
+                    lat: point.lat,
+                    lng: point.lng,
+                    presetPoint,
+                    selectedPointRef: selectedPointRef.current,
+                });
+            }
+            const payload = {
+                generationId: selectedId,
+                lat: point.lat,
+                lng: point.lng,
+            };
+            if (devLog) {
+                console.log("[PLACE payload]", payload, {
+                    latType: typeof payload.lat,
+                    lngType: typeof payload.lng,
+                    latIsFinite: Number.isFinite(payload.lat),
+                    lngIsFinite: Number.isFinite(payload.lng),
+                });
+            }
             const res = await fetch("/api/place", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ generationId: selectedId, z, x, y }),
+                body: JSON.stringify(payload),
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {

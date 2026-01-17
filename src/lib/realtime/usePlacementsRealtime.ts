@@ -4,10 +4,12 @@ import { createBrowserClient } from "@/lib/supabase/browser";
 
 export type PlacementRow = {
   id: string;
-  slot_id: string;
+  slot_id?: string | null;
   image_url?: string | null;
   created_at?: string;
   size?: number;
+  lat?: number | null;
+  lng?: number | null;
   [key: string]: unknown;
 };
 

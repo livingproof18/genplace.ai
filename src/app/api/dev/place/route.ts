@@ -8,15 +8,35 @@ import {
 
 type DevPlaceRequest = {
   generationId?: string;
-  z?: number;
-  x?: number;
-  y?: number;
+  lat?: number | string;
+  lng?: number | string;
 };
 
-function requireInteger(value: unknown, label: string) {
-  if (typeof value !== "number" || !Number.isInteger(value)) {
+function requireNumber(value: unknown, label: string) {
+  const parsed =
+    typeof value === "string"
+      ? Number.parseFloat(value)
+      : typeof value === "number"
+      ? value
+      : NaN;
+  if (!Number.isFinite(parsed)) {
+    const debug =
+      process.env.NODE_ENV !== "production"
+        ? ` Received ${JSON.stringify(value)} (${typeof value}).`
+        : "";
     throw new PlacementRequestError(
-      `${label} must be an integer.`,
+      `${label} must be a number.${debug}`,
+      400,
+      "INVALID_COORDINATE"
+    );
+  }
+  return parsed;
+}
+
+function requireRange(value: number, label: string, min: number, max: number) {
+  if (value < min || value > max) {
+    throw new PlacementRequestError(
+      `${label} must be between ${min} and ${max}.`,
       400,
       "INVALID_COORDINATE"
     );
@@ -27,6 +47,9 @@ function requireInteger(value: unknown, label: string) {
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as DevPlaceRequest;
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[/api/dev/place] body", body);
+    }
     const generationId = (body.generationId || "").trim();
 
     if (!generationId) {
@@ -36,9 +59,8 @@ export async function POST(req: Request) {
       );
     }
 
-    const z = requireInteger(body.z, "z");
-    const x = requireInteger(body.x, "x");
-    const y = requireInteger(body.y, "y");
+    const lat = requireRange(requireNumber(body.lat, "lat"), "lat", -90, 90);
+    const lng = requireRange(requireNumber(body.lng, "lng"), "lng", -180, 180);
 
     const supabase = await createServerClient();
     const { data: authData, error: authError } = await supabase.auth.getUser();
@@ -49,12 +71,20 @@ export async function POST(req: Request) {
       );
     }
 
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[/api/dev/place] insert request", {
+        generationId,
+        userId: authData.user.id,
+        lat,
+        lng,
+      });
+    }
+
     const result = await placeImage({
       userId: authData.user.id,
       generationId,
-      z,
-      x,
-      y,
+      lat,
+      lng,
     });
 
     return NextResponse.json(result);

@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 const TILE_ZOOM = 5;
 const STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 // ----------------
+const DEBUG_OVERLAY = true;
 const devLog = process.env.NODE_ENV !== "production";
 // === Checkpoint spec constants (MapLibre/GL) ===
 const TILE_SIZE = 256;                 // your canvas/generation tile size
@@ -695,7 +696,7 @@ async function ensureWorldImage(
             id,
             type: "raster",
             source: id,
-            minzoom: TILES_VISIBLE_ZOOM,
+            minzoom: DEBUG_OVERLAY ? 0 : TILES_VISIBLE_ZOOM,
             paint: { "raster-opacity": 1 },
         });
     } catch { }
@@ -708,6 +709,18 @@ async function syncWorldPlacements(map: any, placements: PointPlacement[], defau
     if (!map || !map.isStyleLoaded?.() || !mercator?.fromLngLat) return;
     if (devLog) {
         console.log("[map] syncWorldPlacements", { count: placements.length });
+    }
+    if (devLog || DEBUG_OVERLAY) {
+        const zoom = map.getZoom?.();
+        for (const p of placements) {
+            console.log("[PLACEMENT]", {
+                id: p.id,
+                lat: p.lat,
+                lng: p.lng,
+                zoom,
+                inRange: Math.abs(p.lat) <= 90 && Math.abs(p.lng) <= 180,
+            });
+        }
     }
     const seen = new Set<string>();
     const tasks: Promise<void>[] = [];
@@ -926,6 +939,8 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     const placementsRef = useRef<PointPlacement[]>(placements);
     const sizePxRef = useRef(sizePx);
     const onViewportChangeRef = useRef(onViewportChange);
+    const lastFlyPlacementRef = useRef<string | null>(null);
+    const testFlyDoneRef = useRef(false);
     // keep a ref that always contains the latest generationMode
     const generationModeRef = useRef<boolean | undefined>(generationMode);
     useEffect(() => {
@@ -1051,6 +1066,25 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
     }, [gridVisible]);
 
 
+
+    function makeSolidDataUrl(size = 64, color = "#ff0000") {
+        const c = document.createElement("canvas");
+        c.width = size;
+        c.height = size;
+        const ctx = c.getContext("2d")!;
+        ctx.fillStyle = color;
+        ctx.fillRect(0, 0, size, size);
+        // draw a white cross so we can see orientation/visibility
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = Math.max(2, Math.floor(size / 16));
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(size, size);
+        ctx.moveTo(size, 0);
+        ctx.lineTo(0, size);
+        ctx.stroke();
+        return c.toDataURL("image/png");
+    }
 
     // Create a tiny white PNG blob as a guaranteed fallback
     async function createBlankImageBlob(w = 2, h = 2, color = "#ffffff"): Promise<Blob> {
@@ -1305,6 +1339,79 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
 
             map.on("load", () => {
                 installDeclutterHooks(map);
+                if (DEBUG_OVERLAY) {
+                    map.on("error", (e: any) => console.error("[DBG map error]", e?.error || e));
+                    map.on("sourcedata", (e: any) => {
+                        if (e?.sourceId?.startsWith?.("gp_") || e?.sourceId === "gp_test_image_src") {
+                            console.log("[DBG sourcedata]", { sourceId: e.sourceId, isSourceLoaded: e.isSourceLoaded });
+                        }
+                    });
+                    map.on("styledata", () => console.log("[DBG styledata] style changed"));
+                    map.on("idle", () => console.log("[DBG idle] map idle"));
+                }
+                if (DEBUG_OVERLAY) {
+                    const TEST_SRC = "gp_test_image_src";
+                    const TEST_LAYER = "gp_test_image_layer";
+
+                    function addTestImage() {
+                        const c = map.getCenter();
+                        const coords = fixedWorldBounds(mercatorRef.current, c.lng, c.lat, 256);
+                        const dataUrl = makeSolidDataUrl(64, "#ff0000");
+
+                        if (!coords) {
+                            console.warn("[TEST] fixedWorldBounds returned null", { center: c, zoom: map.getZoom() });
+                            return;
+                        }
+
+                        // IMPORTANT: remove any existing test source/layer first
+                        try {
+                            if (map.getLayer(TEST_LAYER)) map.removeLayer(TEST_LAYER);
+                            if (map.getSource(TEST_SRC)) map.removeSource(TEST_SRC);
+                        } catch (e) {
+                            console.warn("[TEST] cleanup failed", e);
+                        }
+
+                        try {
+                            map.addSource(TEST_SRC, { type: "image", url: dataUrl, coordinates: coords });
+                            map.addLayer({
+                                id: TEST_LAYER,
+                                type: "raster",
+                                source: TEST_SRC,
+                                // temporarily no minzoom; always visible
+                                paint: { "raster-opacity": 1 },
+                            });
+
+                            console.log("[TEST] added image at center", {
+                                center: { lng: c.lng, lat: c.lat },
+                                zoom: map.getZoom(),
+                                coords,
+                                hasLayer: !!map.getLayer(TEST_LAYER),
+                                hasSource: !!map.getSource(TEST_SRC),
+                            });
+                            if (!testFlyDoneRef.current) {
+                                testFlyDoneRef.current = true;
+                                const targetZoom = Math.max(map.getZoom?.() ?? 0, MIN_INTERACT_ZOOM + 0.2);
+                                console.log("[TEST] flying to test overlay", { center: c, zoom: targetZoom });
+                                map.flyTo({ center: [c.lng, c.lat], zoom: targetZoom });
+                            }
+                        } catch (e) {
+                            console.error("[TEST] addSource/addLayer failed", e);
+                        }
+                    }
+
+                    // Run once on load, and again after style.load (style swaps can wipe layers)
+                    addTestImage();
+                    map.on("style.load", () => {
+                        console.log("[TEST] style.load => re-adding test overlay");
+                        addTestImage();
+                    });
+
+                    // Optional: rerun after a short delay to catch async style settle
+                    setTimeout(() => {
+                        console.log("[TEST] timeout re-add test overlay");
+                        addTestImage();
+                    }, 800);
+                }
                 map.getCanvas().style.cursor = "grab";
                 map.doubleClickZoom?.disable();
                 const maplibregl = (lib as any).default ?? lib;
@@ -1389,10 +1496,11 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
                     // 2) Raster image placements
                     try {
                         const layers = map.getStyle?.().layers || [];
+                        const rasterVisibility = DEBUG_OVERLAY ? "visible" : (shouldShow ? "visible" : "none");
                         for (const layer of layers) {
                             if (!layer?.id?.startsWith("gp_raster_")) continue;
                             if (map.getLayer(layer.id)) {
-                                map.setLayoutProperty(layer.id, "visibility", shouldShow ? "visible" : "none");
+                                map.setLayoutProperty(layer.id, "visibility", rasterVisibility);
                             }
                         }
                     } catch { }
@@ -1651,6 +1759,15 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
         const map = mapRef.current;
         if (!map) return;
 
+        const flyToLastPlacement = () => {
+            if (!DEBUG_OVERLAY || placements.length === 0) return;
+            const last = placements[placements.length - 1];
+            if (lastFlyPlacementRef.current === last.id) return;
+            lastFlyPlacementRef.current = last.id;
+            console.log("[DBG] flying to last placement", last);
+            map.flyTo({ center: [last.lng, last.lat], zoom: Math.max(map.getZoom?.() ?? 0, 12) });
+        };
+
         const run = () => {
             if (!map.isStyleLoaded?.()) return;
             void syncWorldPlacements(map, placements, sizePx, mercatorRef.current).catch((e) => {
@@ -1660,12 +1777,17 @@ export function MapLibreWorld({ placements, onClickEmpty, onClickPlacement,
 
         if (map.isStyleLoaded?.()) {
             run();
+            flyToLastPlacement();
             return;
         }
 
-        map.once("load", run);
+        const onLoad = () => {
+            run();
+            flyToLastPlacement();
+        };
+        map.once("load", onLoad);
         return () => {
-            try { map.off("load", run); } catch { }
+            try { map.off("load", onLoad); } catch { }
         };
     }, [placements, sizePx]);
 
